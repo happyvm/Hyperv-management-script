@@ -69,6 +69,7 @@ Use `Get-SCVMM-ClusterVolumes.ps1` to export cluster shared volumes with volume 
 - LUN
 - SizeGB
 - DataSource
+- Comment
 
 
-> Note: `Get-SCVMM-ClusterVolumes.ps1` supports a fallback mode when `Get-ClusterSharedVolume` is unavailable; in that case, it exports basic SCVMM-discoverable volume data and marks `DataSource` accordingly.
+> Note: `Get-SCVMM-ClusterVolumes.ps1` first tries WinRM to SCVMM-discovered cluster hosts to run Failover/Storage commands remotely. If unavailable, it falls back to SCVMM-only discovery and indicates this in `DataSource`/`Comment`.

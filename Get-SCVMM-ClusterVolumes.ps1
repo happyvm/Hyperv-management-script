@@ -3,15 +3,17 @@
 Exports cluster volumes and LUN-related details for SCVMM-managed Hyper-V clusters.
 
 .DESCRIPTION
-Connects to SCVMM to enumerate host clusters and exports volume details.
-When Failover Clustering cmdlets are available, the script resolves CSV disk
-metadata and derives LUN from disk location text.
-When Failover Clustering cmdlets are not available, it still exports basic
-cluster/volume information using SCVMM object properties.
+Connects to SCVMM to enumerate host clusters and cluster nodes. For each cluster,
+this script tries to connect over WinRM to one SCVMM-managed host from that cluster,
+then runs FailoverClusters/Storage cmdlets remotely to collect CSV/disk/LUN data.
+
+If WinRM or required cmdlets are unavailable, the script falls back to exporting
+basic volume-like information from SCVMM object properties.
 
 .NOTES
 - Requires the VirtualMachineManager module.
-- For advanced CSV + disk/LUN resolution, install/enable FailoverClusters and Storage cmdlets.
+- Preferred collection path requires WinRM connectivity to at least one node per cluster.
+- Advanced collection path requires FailoverClusters and Storage cmdlets on the remote host.
 #>
 [CmdletBinding()]
 param(
@@ -45,22 +47,146 @@ function Get-OptionalPropertyValue {
     return $null
 }
 
-function Resolve-LunFromLocation {
+function New-VolumeRow {
     param(
-        [Parameter(Mandatory = $false)]
-        [string]$Location
+        [string]$Cluster,
+        [string]$VolumeName,
+        [string]$VolumePath,
+        [string]$OwnerNode,
+        $DiskNumber,
+        [string]$DiskFriendlyName,
+        [string]$DiskLocation,
+        $LUN,
+        $SizeGB,
+        [string]$DataSource,
+        [string]$Comment
     )
 
-    if ([string]::IsNullOrWhiteSpace($Location)) {
-        return $null
+    [pscustomobject]@{
+        Cluster          = $Cluster
+        VolumeName       = $VolumeName
+        VolumePath       = $VolumePath
+        OwnerNode        = $OwnerNode
+        DiskNumber       = $DiskNumber
+        DiskFriendlyName = $DiskFriendlyName
+        DiskLocation     = $DiskLocation
+        LUN              = $LUN
+        SizeGB           = $SizeGB
+        DataSource       = $DataSource
+        Comment          = $Comment
+    }
+}
+
+function Get-ClusterHostNames {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Cluster,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$AllHosts
+    )
+
+    $clusterName = $Cluster.Name
+    $names = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($h in $AllHosts) {
+        $hostCluster = Get-OptionalPropertyValue -Object $h -PropertyName 'HostCluster'
+        if ($hostCluster -and $hostCluster.Name -eq $clusterName) {
+            $names.Add($h.Name) | Out-Null
+        }
     }
 
-    $match = [regex]::Match($Location, 'LUN\s*(\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if ($match.Success) {
-        return [int]$match.Groups[1].Value
+    $vmHosts = Get-OptionalPropertyValue -Object $Cluster -PropertyName 'VMHosts'
+    if ($vmHosts) {
+        foreach ($h in $vmHosts) {
+            $name = Get-OptionalPropertyValue -Object $h -PropertyName 'Name'
+            if ($name) {
+                $names.Add($name) | Out-Null
+            }
+        }
     }
 
-    return $null
+    return $names | Sort-Object -Unique
+}
+
+$remoteCollector = {
+    param([string]$ClusterName)
+
+    $clusterCmd = Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue
+    $volumeCmd = Get-Command -Name Get-Volume -ErrorAction SilentlyContinue
+    $partitionCmd = Get-Command -Name Get-Partition -ErrorAction SilentlyContinue
+    $diskCmd = Get-Command -Name Get-Disk -ErrorAction SilentlyContinue
+
+    if (-not ($clusterCmd -and $volumeCmd -and $partitionCmd -and $diskCmd)) {
+        return [pscustomobject]@{
+            RecordType = 'Error'
+            Error      = 'Missing one or more required cmdlets on remote host: Get-ClusterSharedVolume/Get-Volume/Get-Partition/Get-Disk.'
+        }
+    }
+
+    $csvs = Get-ClusterSharedVolume -Cluster $ClusterName -ErrorAction SilentlyContinue
+    if (-not $csvs) {
+        return [pscustomobject]@{
+            RecordType = 'Error'
+            Error      = 'No Cluster Shared Volumes returned or cluster not reachable from remote host.'
+        }
+    }
+
+    foreach ($csv in $csvs) {
+        $ownerNode = if ($csv.OwnerNode) { $csv.OwnerNode.Name } else { $null }
+        $volumeName = $csv.Name
+        $sharedVolumeInfo = $csv.SharedVolumeInfo
+        $volumePath = if ($sharedVolumeInfo) { $sharedVolumeInfo.FriendlyVolumeName } else { $null }
+        $partitionPath = if ($sharedVolumeInfo -and $sharedVolumeInfo.Partition) { $sharedVolumeInfo.Partition.Name } else { $null }
+
+        $diskNumber = $null
+        $diskFriendlyName = $null
+        $diskLocation = $null
+        $diskSizeGb = $null
+        $lun = $null
+
+        if ($partitionPath) {
+            $volume = Get-Volume -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $partitionPath } |
+                Select-Object -First 1
+
+            if ($volume) {
+                $partition = Get-Partition -ErrorAction SilentlyContinue |
+                    Where-Object { $_.AccessPaths -contains $volume.Path } |
+                    Select-Object -First 1
+
+                if ($partition) {
+                    $diskNumber = $partition.DiskNumber
+                    $disk = Get-Disk -Number $diskNumber -ErrorAction SilentlyContinue
+
+                    if ($disk) {
+                        $diskFriendlyName = $disk.FriendlyName
+                        $diskLocation = $disk.Location
+                        $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
+
+                        if ($diskLocation) {
+                            $match = [regex]::Match($diskLocation, 'LUN\s*(\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                            if ($match.Success) {
+                                $lun = [int]$match.Groups[1].Value
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        [pscustomobject]@{
+            RecordType       = 'Volume'
+            VolumeName       = $volumeName
+            VolumePath       = $volumePath
+            OwnerNode        = $ownerNode
+            DiskNumber       = $diskNumber
+            DiskFriendlyName = $diskFriendlyName
+            DiskLocation     = $diskLocation
+            LUN              = $lun
+            SizeGB           = $diskSizeGb
+        }
+    }
 }
 
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
@@ -68,77 +194,47 @@ $server = Get-SCVMMServer -ComputerName $VMMServer
 
 Write-Verbose 'Querying host clusters from SCVMM...'
 $clusters = Get-SCVMHostCluster -VMMServer $server
-
-$clusterCmd = Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue
-$volumeCmd = Get-Command -Name Get-Volume -ErrorAction SilentlyContinue
-$partitionCmd = Get-Command -Name Get-Partition -ErrorAction SilentlyContinue
-$diskCmd = Get-Command -Name Get-Disk -ErrorAction SilentlyContinue
-
-$canDoAdvanced = $null -ne $clusterCmd -and $null -ne $volumeCmd -and $null -ne $partitionCmd -and $null -ne $diskCmd
-
-if (-not $clusterCmd) {
-    Write-Warning 'Get-ClusterSharedVolume cmdlet not found. Falling back to SCVMM cluster object properties (basic output only).'
-}
+$allHosts = Get-SCVMHost -VMMServer $server
 
 $rows = foreach ($cluster in $clusters) {
     $clusterName = $cluster.Name
+    $hostNames = Get-ClusterHostNames -Cluster $cluster -AllHosts $allHosts
 
-    if ($canDoAdvanced) {
-        $csvs = Get-ClusterSharedVolume -Cluster $clusterName -ErrorAction SilentlyContinue
+    $remoteResults = $null
+    $remoteSource = $null
 
-        foreach ($csv in $csvs) {
-            $ownerNodeObj = Get-OptionalPropertyValue -Object $csv -PropertyName 'OwnerNode'
-            $ownerNode = if ($ownerNodeObj -and $ownerNodeObj.Name) { $ownerNodeObj.Name } else { $null }
-            $volumeName = Get-OptionalPropertyValue -Object $csv -PropertyName 'Name'
-
-            $sharedVolumeInfo = Get-OptionalPropertyValue -Object $csv -PropertyName 'SharedVolumeInfo'
-            $partitionObj = Get-OptionalPropertyValue -Object $sharedVolumeInfo -PropertyName 'Partition'
-            $volumePath = Get-OptionalPropertyValue -Object $sharedVolumeInfo -PropertyName 'FriendlyVolumeName'
-            $partitionPath = Get-OptionalPropertyValue -Object $partitionObj -PropertyName 'Name'
-
-            $diskNumber = $null
-            $diskFriendlyName = $null
-            $diskLocation = $null
-            $diskSizeGb = $null
-            $lun = $null
-
-            if ($ownerNode -and $partitionPath) {
-                $cim = New-CimSession -ComputerName $ownerNode
-                try {
-                    $volume = Get-Volume -CimSession $cim -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Path -eq $partitionPath } |
-                        Select-Object -First 1
-
-                    if ($volume) {
-                        $partition = Get-Partition -CimSession $cim -ErrorAction SilentlyContinue |
-                            Where-Object { $_.AccessPaths -contains $volume.Path } |
-                            Select-Object -First 1
-
-                        if ($partition) {
-                            $diskNumber = $partition.DiskNumber
-
-                            $disk = Get-Disk -CimSession $cim -Number $diskNumber -ErrorAction SilentlyContinue
-                            if ($disk) {
-                                $diskFriendlyName = $disk.FriendlyName
-                                $diskLocation = $disk.Location
-                                $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
-                                $lun = Resolve-LunFromLocation -Location $diskLocation
-                            }
-                        }
-                    }
-                }
-                finally {
-                    Remove-CimSession -CimSession $cim -ErrorAction SilentlyContinue
-                }
-            }
-
-            New-VolumeRow -Cluster $clusterName -VolumeName $volumeName -VolumePath $volumePath -OwnerNode $ownerNode -DiskNumber $diskNumber -DiskFriendlyName $diskFriendlyName -DiskLocation $diskLocation -LUN $lun -SizeGB $diskSizeGb -DataSource 'FailoverClusters+Storage'
+    foreach ($hostName in $hostNames) {
+        if (-not (Test-WSMan -ComputerName $hostName -ErrorAction SilentlyContinue)) {
+            continue
         }
 
-        continue
+        $remoteResults = Invoke-Command -ComputerName $hostName -ScriptBlock $remoteCollector -ArgumentList $clusterName -ErrorAction SilentlyContinue
+        if ($remoteResults) {
+            $remoteSource = $hostName
+            break
+        }
     }
 
-    # Basic fallback: extract whatever volume-like info exists directly on SCVMM cluster object.
+    if ($remoteResults) {
+        $errors = $remoteResults | Where-Object { $_.RecordType -eq 'Error' }
+        $volumes = $remoteResults | Where-Object { $_.RecordType -eq 'Volume' }
+
+        foreach ($item in $volumes) {
+            New-VolumeRow -Cluster $clusterName -VolumeName $item.VolumeName -VolumePath $item.VolumePath -OwnerNode $item.OwnerNode -DiskNumber $item.DiskNumber -DiskFriendlyName $item.DiskFriendlyName -DiskLocation $item.DiskLocation -LUN $item.LUN -SizeGB $item.SizeGB -DataSource 'Remote-WinRM-FailoverClusters' -Comment "Collected from $remoteSource"
+        }
+
+        if (-not $volumes -and $errors) {
+            foreach ($err in $errors) {
+                New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'Remote-WinRM-Error' -Comment $err.Error
+            }
+        }
+
+        if ($volumes -or $errors) {
+            continue
+        }
+    }
+
+    # Fallback: SCVMM-only introspection.
     $fallbackVolumeLists = @('SharedVolumes', 'ClusterSharedVolumes', 'Volumes', 'StorageVolumes')
     $generatedRows = 0
 
@@ -160,13 +256,13 @@ $rows = foreach ($cluster in $clusters) {
                 $owner = $owner.Name
             }
 
-            New-VolumeRow -Cluster $clusterName -VolumeName $name -VolumePath $path -OwnerNode $owner -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback'
+            New-VolumeRow -Cluster $clusterName -VolumeName $name -VolumePath $path -OwnerNode $owner -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback' -Comment 'WinRM or required remote cmdlets unavailable'
             $generatedRows++
         }
     }
 
     if ($generatedRows -eq 0) {
-        New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback-NoVolumePropertyFound'
+        New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback-NoVolumePropertyFound' -Comment 'No volume-like properties found on SCVMM cluster object'
     }
 }
 
