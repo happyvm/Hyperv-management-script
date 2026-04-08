@@ -15,6 +15,7 @@ Role classification priority (per adapter):
 .NOTES
 - Requires the VirtualMachineManager PowerShell module.
 - Output contains one row per node, with role-based IP columns.
+- Also exports interface/network names discovered for each role.
 #>
 [CmdletBinding()]
 param(
@@ -140,7 +141,11 @@ function Add-AdapterIps {
         [object]$AdminIps,
         [object]$LiveMigrationIps,
         [object]$ClusterTrafficIps,
-        [object]$NodeIps
+        [object]$NodeIps,
+        [object]$AdminInterfaces,
+        [object]$LiveMigrationInterfaces,
+        [object]$ClusterTrafficInterfaces,
+        [object]$NodeInterfaces
     )
 
     $role = Get-AdapterRole -Adapter $Adapter
@@ -186,6 +191,10 @@ $rows = foreach ($vmHost in $vmHosts) {
     $clusterTrafficIps = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $nodeIps           = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     $clusterIps        = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $adminInterfaces   = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $liveMigIfaces     = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $clusterIfaces     = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $nodeIfaces        = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     # ------------------------------------------------------------------
     # 1. Management IP from the VMHost object itself (most reliable).
@@ -233,6 +242,8 @@ $rows = foreach ($vmHost in $vmHosts) {
         }
         if ($clusterNetworks) {
             foreach ($net in @($clusterNetworks)) {
+                $netName = Get-SafeProperty -Object $net -Property 'Name'
+                if ($netName) { [void]$clusterIfaces.Add($netName) }
                 foreach ($prop in @('IPAddress', 'IPAddresses', 'Address')) {
                     foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $net -Property $prop))) {
                         [void]$clusterTrafficIps.Add($ip)
@@ -259,7 +270,11 @@ $rows = foreach ($vmHost in $vmHosts) {
             -AdminIps $adminIps `
             -LiveMigrationIps $liveMigrationIps `
             -ClusterTrafficIps $clusterTrafficIps `
-            -NodeIps $nodeIps
+            -NodeIps $nodeIps `
+            -AdminInterfaces $adminInterfaces `
+            -LiveMigrationInterfaces $liveMigIfaces `
+            -ClusterTrafficInterfaces $clusterIfaces `
+            -NodeInterfaces $nodeIfaces
     }
 
     # ------------------------------------------------------------------
@@ -279,7 +294,11 @@ $rows = foreach ($vmHost in $vmHosts) {
             -AdminIps $adminIps `
             -LiveMigrationIps $liveMigrationIps `
             -ClusterTrafficIps $clusterTrafficIps `
-            -NodeIps $nodeIps
+            -NodeIps $nodeIps `
+            -AdminInterfaces $adminInterfaces `
+            -LiveMigrationInterfaces $liveMigIfaces `
+            -ClusterTrafficInterfaces $clusterIfaces `
+            -NodeInterfaces $nodeIfaces
     }
 
     # ------------------------------------------------------------------
@@ -312,9 +331,13 @@ $rows = foreach ($vmHost in $vmHosts) {
         Cluster           = $clusterName
         Node              = $vmHost.Name
         AdminIPs          = Join-IpSet -Set $adminIps
+        AdminInterfaces   = Join-IpSet -Set $adminInterfaces
         LiveMigrationIPs  = Join-IpSet -Set $liveMigrationIps
+        LiveMigrationInterfaces = Join-IpSet -Set $liveMigIfaces
         ClusterTrafficIPs = Join-IpSet -Set $clusterTrafficIps
+        ClusterTrafficInterfaces = Join-IpSet -Set $clusterIfaces
         NodeIPs           = Join-IpSet -Set $nodeIps
+        NodeInterfaces    = Join-IpSet -Set $nodeIfaces
         ClusterIPs        = Join-IpSet -Set $clusterIps
     }
 }
