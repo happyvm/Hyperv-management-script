@@ -65,9 +65,13 @@ The CSV now exports one row per node with role-based columns:
 - `Cluster`
 - `Node`
 - `AdminIPs`
+- `AdminInterfaces`
 - `LiveMigrationIPs`
+- `LiveMigrationInterfaces`
 - `ClusterTrafficIPs`
+- `ClusterTrafficInterfaces`
 - `NodeIPs`
+- `NodeInterfaces`
 - `ClusterIPs`
 
 Each `*IPs` column is a semicolon-separated list of unique IP addresses.
