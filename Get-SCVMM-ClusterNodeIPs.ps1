@@ -238,6 +238,49 @@ function Join-IpSet {
     return (@($Set | Sort-Object) -join ';')
 }
 
+function Add-AdapterIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Set,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Adapter
+    )
+
+    foreach ($propertyName in @(
+        'IPAddress',
+        'IPAddresses',
+        'IPv4Address',
+        'IPv6Address',
+        'IPv4Addresses',
+        'IPv6Addresses',
+        'Address',
+        'Addresses',
+        'ManagementIPAddress',
+        'ManagementIPAddresses',
+        'VirtualIPAddress'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $propertyName) {
+            Add-IpToSet -Set $Set -Values $Adapter.$propertyName
+        }
+    }
+
+    foreach ($nestedProperty in @(
+        'IPConfiguration',
+        'IPConfigurations',
+        'NetworkAdapterIPAddresses',
+        'HostNetworkAdapterIPConfiguration',
+        'VMHostNetworkAdapterIPAddresses',
+        'VirtualNetworkAdapter',
+        'VMHostVirtualNetworkAdapter',
+        'HostVirtualNetworkAdapter'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $nestedProperty) {
+            Add-IpToSet -Set $Set -Values $Adapter.$nestedProperty
+        }
+    }
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -285,6 +328,8 @@ $rows = foreach ($vmHost in $vmHosts) {
                 'LogicalNetworkDefinition',
                 'VMNetwork',
                 'NetworkName',
+                'VirtualSwitch',
+                'VMHostVirtualSwitch',
                 'Role',
                 'RoleType',
                 'Usage'
@@ -305,29 +350,7 @@ $rows = foreach ($vmHost in $vmHosts) {
                 default { Write-Output -NoEnumerate $nodeIps; break }
             }
 
-            foreach ($propertyName in @(
-                'IPAddress',
-                'IPAddresses',
-                'IPv4Address',
-                'IPv6Address',
-                'IPv4Addresses',
-                'IPv6Addresses',
-                'Address',
-                'Addresses',
-                'ManagementIPAddress',
-                'ManagementIPAddresses',
-                'VirtualIPAddress'
-            )) {
-                if ($adapter.PSObject.Properties.Name -contains $propertyName) {
-                    Add-IpToSet -Set $roleSet -Values $adapter.$propertyName
-                }
-            }
-
-            foreach ($nestedProperty in @('IPConfiguration', 'IPConfigurations', 'NetworkAdapterIPAddresses', 'HostNetworkAdapterIPConfiguration')) {
-                if ($adapter.PSObject.Properties.Name -contains $nestedProperty) {
-                    Add-IpToSet -Set $roleSet -Values $adapter.$nestedProperty
-                }
-            }
+            Add-AdapterIpCandidates -Set $roleSet -Adapter $adapter
         }
     }
 
