@@ -130,11 +130,11 @@ function Add-AdapterIps {
 
     $role = Get-AdapterRole -Adapter $Adapter
 
-    $targetSet = switch ($role) {
-        'Admin'          { $AdminIps }
-        'LiveMigration'  { $LiveMigrationIps }
-        'ClusterTraffic' { $ClusterTrafficIps }
-        default          { $NodeIps }
+    $targetSet = $NodeIps
+    switch ($role) {
+        'Admin'          { $targetSet = $AdminIps }
+        'LiveMigration'  { $targetSet = $LiveMigrationIps }
+        'ClusterTraffic' { $targetSet = $ClusterTrafficIps }
     }
 
     $ipAddresses = Get-SafeProperty -Object $Adapter -Property 'IPAddresses'
