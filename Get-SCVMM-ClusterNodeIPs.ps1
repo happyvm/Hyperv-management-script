@@ -157,23 +157,6 @@ function Add-AdapterIps {
         'ClusterTraffic' { $targetSet = $ClusterTrafficIps }
     }
 
-    $targetNames = $NodeInterfaces
-    switch ($role) {
-        'Admin'          { $targetNames = $AdminInterfaces }
-        'LiveMigration'  { $targetNames = $LiveMigrationInterfaces }
-        'ClusterTraffic' { $targetNames = $ClusterTrafficInterfaces }
-    }
-
-    $adapterLabelParts = @(
-        (Get-SafeProperty -Object $Adapter -Property 'Name'),
-        (Get-SafeProperty -Object $Adapter -Property 'ConnectionName'),
-        (Get-SafeProperty -Object $Adapter -Property 'Description'),
-        (Get-SafeProperty -Object $Adapter -Property 'VMNetworkName')
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    if ($adapterLabelParts.Count -gt 0) {
-        [void]$targetNames.Add(($adapterLabelParts -join ' | '))
-    }
-
     foreach ($ipProp in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses')) {
         $ipAddresses = Get-SafeProperty -Object $Adapter -Property $ipProp
         foreach ($ip in (Get-CleanIps -Value $ipAddresses)) {
@@ -234,16 +217,6 @@ $rows = foreach ($vmHost in $vmHosts) {
             [void]$liveMigrationIps.Add($ip)
         }
     }
-    foreach ($prop in @('MigrationNetworks', 'LiveMigrationNetworks')) {
-        foreach ($n in @(Get-SafeProperty -Object $vmHost -Property $prop)) {
-            $nName = Get-SafeProperty -Object $n -Property 'Name'
-            if (-not $nName) { $nName = [string]$n }
-            if (-not [string]::IsNullOrWhiteSpace($nName)) {
-                [void]$liveMigIfaces.Add($nName)
-            }
-        }
-    }
-
     # ------------------------------------------------------------------
     # 3. Cluster virtual IP and per-node cluster network IPs.
     # ------------------------------------------------------------------
