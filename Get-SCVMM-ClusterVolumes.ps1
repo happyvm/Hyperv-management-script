@@ -7,6 +7,7 @@ Connects to SCVMM to enumerate host clusters and cluster nodes. For each cluster
 this script tries to connect over WinRM to one SCVMM-managed host from that cluster,
 then runs FailoverClusters/Storage cmdlets in that node's local cluster context
 to collect CSV/disk/LUN data.
+WinRM targets prefer FQDN host names when available.
 
 If WinRM or required cmdlets are unavailable, the script falls back to exporting
 basic volume-like information from SCVMM object properties.
@@ -90,24 +91,45 @@ function Get-ClusterHostNames {
     $clusterName = $Cluster.Name
     $names = [System.Collections.Generic.List[string]]::new()
 
+    function Add-HostConnectionNames {
+        param(
+            [Parameter(Mandatory = $true)]
+            $HostObject,
+
+            [Parameter(Mandatory = $true)]
+            [System.Collections.Generic.List[string]]$TargetNames
+        )
+
+        foreach ($propertyName in @('FullyQualifiedDomainName', 'FQDN', 'ComputerName', 'Name')) {
+            $value = Get-OptionalPropertyValue -Object $HostObject -PropertyName $propertyName
+            if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                $TargetNames.Add([string]$value) | Out-Null
+            }
+        }
+    }
+
     foreach ($h in $AllHosts) {
         $hostCluster = Get-OptionalPropertyValue -Object $h -PropertyName 'HostCluster'
         if ($hostCluster -and $hostCluster.Name -eq $clusterName) {
-            $names.Add($h.Name) | Out-Null
+            Add-HostConnectionNames -HostObject $h -TargetNames $names
         }
     }
 
     $vmHosts = Get-OptionalPropertyValue -Object $Cluster -PropertyName 'VMHosts'
     if ($vmHosts) {
         foreach ($h in $vmHosts) {
-            $name = Get-OptionalPropertyValue -Object $h -PropertyName 'Name'
-            if ($name) {
-                $names.Add($name) | Out-Null
-            }
+            Add-HostConnectionNames -HostObject $h -TargetNames $names
         }
     }
 
-    return $names | Sort-Object -Unique
+    return $names |
+        Sort-Object -Unique @{
+            Expression = {
+                if ($_ -like '*.*') { 0 } else { 1 }
+            }
+        }, @{
+            Expression = { $_ }
+        }
 }
 
 $remoteCollector = {
