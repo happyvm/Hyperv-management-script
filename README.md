@@ -48,6 +48,27 @@ Use `Get-SCVMM-ClusterVolumes.ps1` to export CSV volume details (including LUN-r
 
 For Pure Storage-backed disks, the script now prefers the disk serial number for the `LUN` column so the value maps more closely to Pure array-side volume identity.
 
+## SCVMM cluster node + cluster IP list export
+
+Use `Get-SCVMM-ClusterNodeIPs.ps1` to export IPs for:
+
+- Admin/management host IPs
+- Live migration network IPs
+- Cluster traffic IPs
+- Cluster virtual/service IPs (when exposed by SCVMM)
+
+The CSV now exports one row per node with role-based columns:
+
+- `Cluster`
+- `Node`
+- `AdminIPs`
+- `LiveMigrationIPs`
+- `ClusterTrafficIPs`
+- `NodeIPs`
+- `ClusterIPs`
+
+Each `*IPs` column is a semicolon-separated list of unique IP addresses.
+
 ## SCVMM network implementation from CSV
 
 Use `New-SCVMM-NetworksFromCsv.ps1` to create VM networks + VM subnets in SCVMM from a CSV file.
