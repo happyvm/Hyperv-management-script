@@ -17,7 +17,7 @@ param(
     [string]$VMMServer,
 
     [Parameter(Mandatory = $false)]
-    [string]$OutputPath = '.\\SCVMM-ClusterNodeIPs.csv'
+    [string]$OutputPath = '.\SCVMM-ClusterNodeIPs.csv'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,7 +74,11 @@ function Get-IpValues {
 
     if ($Value -is [psobject] -and $Value -isnot [string]) {
         $results = [System.Collections.Generic.List[string]]::new()
-        foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Address', 'IPv6Address', 'IPv4Addresses', 'IPv6Addresses', 'Address', 'Addresses')) {
+        $knownIpPropertyNames = [System.Collections.Generic.HashSet[string]]::new(
+            [string[]]@('IPAddress', 'IPAddresses', 'IPv4Address', 'IPv6Address', 'IPv4Addresses', 'IPv6Addresses', 'Address', 'Addresses'),
+            [System.StringComparer]::OrdinalIgnoreCase
+        )
+        foreach ($propertyName in $knownIpPropertyNames) {
             if ($Value.PSObject.Properties.Name -contains $propertyName) {
                 foreach ($nestedIp in (Get-IpValues -Value $Value.$propertyName -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                     $results.Add($nestedIp) | Out-Null
@@ -83,6 +87,9 @@ function Get-IpValues {
         }
 
         foreach ($property in @($Value.PSObject.Properties)) {
+            if ($knownIpPropertyNames.Contains($property.Name)) {
+                continue
+            }
             if ($property.Name -match '(?i)ip|address') {
                 foreach ($nestedIp in (Get-IpValues -Value $property.Value -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                     $results.Add($nestedIp) | Out-Null
@@ -566,8 +573,10 @@ $rows = foreach ($vmHost in $vmHosts) {
         }
     }
 
-    if ($adminIps.Count -eq 0 -and $nodeIps.Count -eq 0) {
+    if ($adminIps.Count -eq 0) {
         Add-ResolvedHostIpCandidates -Set $adminIps -HostName $vmHost.Name
+    }
+    if ($nodeIps.Count -eq 0) {
         Add-ResolvedHostIpCandidates -Set $nodeIps -HostName $vmHost.FullyQualifiedDomainName
     }
 
