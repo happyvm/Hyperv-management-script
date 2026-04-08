@@ -57,7 +57,17 @@ Use `Get-SCVMM-ClusterNodeIPs.ps1` to export IPs for:
 - Cluster traffic IPs
 - Cluster virtual/service IPs (when exposed by SCVMM)
 
-The CSV includes `Cluster`, `Node`, `IP`, and `Role`.
+The CSV now exports one row per node with role-based columns:
+
+- `Cluster`
+- `Node`
+- `AdminIPs`
+- `LiveMigrationIPs`
+- `ClusterTrafficIPs`
+- `NodeIPs`
+- `ClusterIPs`
+
+Each `*IPs` column is a semicolon-separated list of unique IP addresses.
 
 ## SCVMM network implementation from CSV
 
