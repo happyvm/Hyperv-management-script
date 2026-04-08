@@ -129,6 +129,56 @@ function Get-NetworkRoleFromText {
     return 'Node'
 }
 
+function Get-TextValues {
+    param(
+        [Parameter(Mandatory = $false)]
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return @()
+    }
+
+    if ($Value -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            return @()
+        }
+        return @($Value)
+    }
+
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $results = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in $Value) {
+            foreach ($text in (Get-TextValues -Value $item)) {
+                $results.Add($text) | Out-Null
+            }
+        }
+        return @($results)
+    }
+
+    if ($Value -is [psobject]) {
+        $results = [System.Collections.Generic.List[string]]::new()
+        foreach ($propertyName in @('Name', 'Description', 'ConnectionName', 'NetworkName', 'LogicalNetwork', 'LogicalNetworkDefinition', 'VMNetwork', 'Label', 'DisplayName', 'Role', 'RoleType', 'Usage')) {
+            if ($Value.PSObject.Properties.Name -contains $propertyName) {
+                foreach ($text in (Get-TextValues -Value $Value.$propertyName)) {
+                    $results.Add($text) | Out-Null
+                }
+            }
+        }
+
+        if ($results.Count -gt 0) {
+            return @($results)
+        }
+    }
+
+    $rendered = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($rendered)) {
+        return @()
+    }
+
+    return @($rendered)
+}
+
 function Add-IpToSet {
     param(
         [Parameter(Mandatory = $true)]
@@ -212,14 +262,25 @@ $rows = foreach ($vmHost in $vmHosts) {
     if ($hostNetworkAdapterCmd) {
         $adapters = @(Get-SCVMHostNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue)
         foreach ($adapter in $adapters) {
-            $role = Get-NetworkRoleFromText -TextValues @(
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'Name'),
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'Description'),
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'ConnectionName'),
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'LogicalNetwork'),
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'VMNetwork'),
-                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'NetworkName')
-            )
+            $roleHints = [System.Collections.Generic.List[string]]::new()
+            foreach ($propertyName in @(
+                'Name',
+                'Description',
+                'ConnectionName',
+                'LogicalNetwork',
+                'LogicalNetworkDefinition',
+                'VMNetwork',
+                'NetworkName',
+                'Role',
+                'RoleType',
+                'Usage'
+            )) {
+                foreach ($text in (Get-TextValues -Value (Get-OptionalPropertyValue -Object $adapter -PropertyName $propertyName))) {
+                    $roleHints.Add($text) | Out-Null
+                }
+            }
+
+            $role = Get-NetworkRoleFromText -TextValues @($roleHints)
 
             # HashSet objects are enumerable; emit them as single objects (NoEnumerate)
             # so an empty set does not collapse to $null through switch output.
@@ -230,9 +291,27 @@ $rows = foreach ($vmHost in $vmHosts) {
                 default { Write-Output -NoEnumerate $nodeIps; break }
             }
 
-            foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Address', 'IPv6Address', 'IPv4Addresses', 'IPv6Addresses', 'Address', 'Addresses')) {
+            foreach ($propertyName in @(
+                'IPAddress',
+                'IPAddresses',
+                'IPv4Address',
+                'IPv6Address',
+                'IPv4Addresses',
+                'IPv6Addresses',
+                'Address',
+                'Addresses',
+                'ManagementIPAddress',
+                'ManagementIPAddresses',
+                'VirtualIPAddress'
+            )) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
                     Add-IpToSet -Set $roleSet -Values $adapter.$propertyName
+                }
+            }
+
+            foreach ($nestedProperty in @('IPConfiguration', 'IPConfigurations', 'NetworkAdapterIPAddresses', 'HostNetworkAdapterIPConfiguration')) {
+                if ($adapter.PSObject.Properties.Name -contains $nestedProperty) {
+                    Add-IpToSet -Set $roleSet -Values $adapter.$nestedProperty
                 }
             }
         }
