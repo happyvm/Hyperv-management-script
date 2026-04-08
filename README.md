@@ -47,3 +47,24 @@ Use `-Delimiter ';'` (default) for semicolon-separated CSV, or `-Delimiter ','` 
 Use `Get-SCVMM-ClusterVolumes.ps1` to export CSV volume details (including LUN-related identity) for SCVMM-managed Hyper-V clusters.
 
 For Pure Storage-backed disks, the script now prefers the disk serial number for the `LUN` column so the value maps more closely to Pure array-side volume identity.
+
+## SCVMM network implementation from CSV
+
+Use `New-SCVMM-NetworksFromCsv.ps1` to create VM networks + VM subnets in SCVMM from a CSV file.
+
+Required CSV headers (case-insensitive):
+- `Name`
+- `VLAN id`
+- `subnet` (CIDR, for example `10.10.20.0/24`)
+
+### Example
+
+```powershell
+.\New-SCVMM-NetworksFromCsv.ps1 \
+  -VMMServer "vmm01.contoso.local" \
+  -LogicalSwitchName "Prod-LogicalSwitch" \
+  -CsvPath ".\networks.csv" \
+  -Verbose
+```
+
+Use `-WhatIf` first to validate what would be created without making changes.
