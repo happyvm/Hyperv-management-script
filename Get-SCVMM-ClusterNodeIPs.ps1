@@ -126,17 +126,6 @@ function Test-IPv4InCidr {
     if ($IPAddress -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
         return $false
     }
-    catch {
-        Write-Verbose "Get-VMMigrationNetwork failed for '$ComputerName': $($_.Exception.Message)"
-    }
-}
-
-function Get-ClusterTrafficIps {
-    param(
-        [string]$ClusterName,
-        [string]$NodeName,
-        [object]$ClusterTrafficIps
-    )
 
     if ($Cidr -notmatch '^(\d{1,3}(\.\d{1,3}){3})/(\d{1,2})$') {
         return $false
