@@ -378,6 +378,107 @@ function Add-ResolvedHostIpCandidates {
     }
 }
 
+function Get-RoleIpSet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Role,
+
+        [Parameter(Mandatory = $true)]
+        [object]$AdminIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$LiveMigrationIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$ClusterTrafficIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$NodeIps
+    )
+
+    switch ($Role) {
+        'Admin' { return $AdminIps }
+        'LiveMigration' { return $LiveMigrationIps }
+        'ClusterTraffic' { return $ClusterTrafficIps }
+        default { return $NodeIps }
+    }
+}
+
+function Add-HostConfigurationIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$VMHost,
+
+        [Parameter(Mandatory = $true)]
+        [object]$AdminIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$LiveMigrationIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$ClusterTrafficIps,
+
+        [Parameter(Mandatory = $true)]
+        [object]$NodeIps
+    )
+
+    foreach ($property in @($VMHost.PSObject.Properties)) {
+        $propertyName = $property.Name
+        if ($propertyName -notmatch '(?i)network|adapter|migration|cluster|management|admin|ip|address|switch') {
+            continue
+        }
+
+        $value = $property.Value
+        if ($null -eq $value) {
+            continue
+        }
+
+        $candidates = if ($value -is [System.Collections.IEnumerable] -and $value -isnot [string]) { @($value) } else { @($value) }
+        foreach ($candidate in $candidates) {
+            if ($null -eq $candidate) {
+                continue
+            }
+
+            $roleHints = [System.Collections.Generic.List[string]]::new()
+            $roleHints.Add($propertyName) | Out-Null
+
+            foreach ($text in (Get-TextValues -Value $candidate)) {
+                $roleHints.Add($text) | Out-Null
+            }
+
+            foreach ($nestedName in @(
+                'Name',
+                'Description',
+                'ConnectionName',
+                'LogicalNetwork',
+                'LogicalNetworkDefinition',
+                'VMNetwork',
+                'NetworkName',
+                'VirtualSwitch',
+                'VMHostVirtualSwitch',
+                'Role',
+                'RoleType',
+                'Usage',
+                'Purpose'
+            )) {
+                foreach ($text in (Get-TextValues -Value (Get-OptionalPropertyValue -Object $candidate -PropertyName $nestedName))) {
+                    $roleHints.Add($text) | Out-Null
+                }
+            }
+
+            $role = Get-NetworkRoleFromText -TextValues @($roleHints)
+            $roleSet = Get-RoleIpSet -Role $role -AdminIps $AdminIps -LiveMigrationIps $LiveMigrationIps -ClusterTrafficIps $ClusterTrafficIps -NodeIps $NodeIps
+
+            Add-IpToSet -Set $roleSet -Values $candidate
+
+            if ($candidate -is [psobject]) {
+                Add-AdapterIpCandidates -Set $roleSet -Adapter $candidate
+                Add-VirtualSwitchInterfaceIpCandidates -Set $roleSet -Adapter $candidate
+            }
+        }
+    }
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -439,20 +540,15 @@ $rows = foreach ($vmHost in $vmHosts) {
             }
 
             $role = Get-NetworkRoleFromText -TextValues @($roleHints)
-
-            # HashSet objects are enumerable; emit them as single objects (NoEnumerate)
-            # so an empty set does not collapse to $null through switch output.
-            $roleSet = switch ($role) {
-                'Admin' { Write-Output -NoEnumerate $adminIps; break }
-                'LiveMigration' { Write-Output -NoEnumerate $liveMigrationIps; break }
-                'ClusterTraffic' { Write-Output -NoEnumerate $clusterTrafficIps; break }
-                default { Write-Output -NoEnumerate $nodeIps; break }
-            }
+            $roleSet = Get-RoleIpSet -Role $role -AdminIps $adminIps -LiveMigrationIps $liveMigrationIps -ClusterTrafficIps $clusterTrafficIps -NodeIps $nodeIps
 
             Add-AdapterIpCandidates -Set $roleSet -Adapter $adapter
             Add-VirtualSwitchInterfaceIpCandidates -Set $roleSet -Adapter $adapter
         }
     }
+
+    # Fallback: pull role/IP data directly from VMHost configuration properties.
+    Add-HostConfigurationIpCandidates -VMHost $vmHost -AdminIps $adminIps -LiveMigrationIps $liveMigrationIps -ClusterTrafficIps $clusterTrafficIps -NodeIps $nodeIps
 
     if ($hostVirtualAdapterCmd) {
         $virtualAdapters = @(Get-SCVMHostVirtualNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue)
