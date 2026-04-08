@@ -103,9 +103,11 @@ function Get-NetworkRoleFromText {
 
 function Add-IpEntry {
     param(
+        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
         [System.Collections.Generic.List[psobject]]$List,
 
+        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
         [System.Collections.Generic.HashSet[string]]$KeySet,
 
