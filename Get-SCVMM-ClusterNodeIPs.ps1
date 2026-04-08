@@ -79,21 +79,21 @@ Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
 Write-Verbose 'Querying Hyper-V hosts (nodes) from SCVMM...'
-$hosts = Get-SCVMHost -VMMServer $server
+$vmHosts = @(Get-SCVMHost -VMMServer $server)
 
 $hostNetworkAdapterCmd = Get-Command -Name Get-SCVMHostNetworkAdapter -ErrorAction SilentlyContinue
 
-$rows = foreach ($vmHost in $hosts) {
+$rows = foreach ($vmHost in $vmHosts) {
     $hostCluster = Get-OptionalPropertyValue -Object $vmHost -PropertyName 'HostCluster'
     $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { 'Standalone' }
 
-    $ips = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $ipList = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     # Collect candidate IP values from common SCVMM host properties.
     foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses', 'ManagementIPAddress')) {
         if ($vmHost.PSObject.Properties.Name -contains $propertyName) {
             foreach ($ipValue in (Get-IpValues -Value $vmHost.$propertyName)) {
-                [void]$ips.Add($ipValue)
+                [void]$ipList.Add($ipValue)
             }
         }
     }
@@ -105,14 +105,14 @@ $rows = foreach ($vmHost in $hosts) {
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses')) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
                     foreach ($ipValue in (Get-IpValues -Value $adapter.$propertyName)) {
-                        [void]$ips.Add($ipValue)
+                        [void]$ipList.Add($ipValue)
                     }
                 }
             }
         }
     }
 
-    $uniqueIps = @($ips | Sort-Object)
+    $uniqueIps = @($ipList | Sort-Object)
 
     if ($uniqueIps.Count -eq 0) {
         [pscustomobject]@{
@@ -132,7 +132,7 @@ $rows = foreach ($vmHost in $hosts) {
     }
 }
 
-$rows = @($rows)
+$rows = @($rows | Where-Object { $null -ne $_ })
 
 $rows |
     Sort-Object Cluster, Node, IP |
