@@ -245,11 +245,11 @@ $remoteCollector = {
                         $diskLocation = $disk.Location
                         $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
 
-                        if ($diskLocation) {
-                            $match = [regex]::Match($diskLocation, 'LUN\s*(\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-                            if ($match.Success) {
-                                $lun = [int]$match.Groups[1].Value
-                            }
+                        # Prefer array-side identifier (VPD/WWID-like value) instead of host-side SCSI LUN index.
+                        if (-not [string]::IsNullOrWhiteSpace([string]$disk.UniqueId)) {
+                            $lun = [string]$disk.UniqueId
+                        } elseif (-not [string]::IsNullOrWhiteSpace([string]$disk.SerialNumber)) {
+                            $lun = [string]$disk.SerialNumber
                         }
                     }
                 }
