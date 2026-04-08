@@ -46,13 +46,17 @@ function Get-OptionalPropertyValue {
 function Add-IpValues {
     param(
         [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.List[string]]$Target,
+        $Target,
 
         [Parameter(Mandatory = $false)]
         $Value
     )
 
     if ($null -eq $Value) {
+        return
+    }
+
+    if ($null -eq $Target) {
         return
     }
 
@@ -70,7 +74,9 @@ function Add-IpValues {
 
     # Keep only valid IPv4/IPv6 values.
     if ($text -as [System.Net.IPAddress]) {
-        $Target.Add($text) | Out-Null
+        if ($Target -is [System.Collections.IList]) {
+            $Target.Add($text) | Out-Null
+        }
     }
 }
 
