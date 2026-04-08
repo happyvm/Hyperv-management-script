@@ -109,8 +109,27 @@ function Get-IpValues {
 
     # Also parse lists and embedded text containing IP tokens.
     foreach ($token in ($text -split '[,\s;]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-        if ($token -as [System.Net.IPAddress]) {
-            [void]$resultSet.Add($token)
+        $candidateToken = $token.Trim('[](){}')
+        if ($candidateToken -match '/') {
+            $candidateToken = $candidateToken.Split('/')[0]
+        }
+        if ($candidateToken -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidateToken)
+        }
+    }
+
+    # Fallback regex scan for embedded IPv4 and IPv6 tokens inside arbitrary text.
+    foreach ($ipv4 in [System.Text.RegularExpressions.Regex]::Matches($text, '(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)')) {
+        $candidate = $ipv4.Value
+        if ($candidate -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidate)
+        }
+    }
+
+    foreach ($ipv6 in [System.Text.RegularExpressions.Regex]::Matches($text, '(?i)(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-f:])')) {
+        $candidate = $ipv6.Value.Trim(':')
+        if ($candidate -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidate)
         }
     }
 
@@ -334,6 +353,31 @@ function Add-VirtualSwitchInterfaceIpCandidates {
     }
 }
 
+function Add-ResolvedHostIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Set,
+
+        [Parameter(Mandatory = $false)]
+        [string]$HostName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HostName)) {
+        return
+    }
+
+    try {
+        foreach ($address in [System.Net.Dns]::GetHostAddresses($HostName)) {
+            if ($null -ne $address) {
+                [void]$Set.Add($address.IPAddressToString)
+            }
+        }
+    }
+    catch {
+        Write-Verbose "DNS lookup failed for host '$HostName': $($_.Exception.Message)"
+    }
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -424,6 +468,11 @@ $rows = foreach ($vmHost in $vmHosts) {
             Add-IpToSet -Set $nodeIps -Values $virtualSwitch
             Add-VirtualSwitchInterfaceIpCandidates -Set $nodeIps -Adapter $virtualSwitch
         }
+    }
+
+    if ($adminIps.Count -eq 0 -and $nodeIps.Count -eq 0) {
+        Add-ResolvedHostIpCandidates -Set $adminIps -HostName $vmHost.Name
+        Add-ResolvedHostIpCandidates -Set $nodeIps -HostName $vmHost.FullyQualifiedDomainName
     }
 
     [pscustomobject]@{
