@@ -97,6 +97,7 @@ function Get-ClusterHostNames {
             $HostObject,
 
             [Parameter(Mandatory = $true)]
+            [AllowEmptyCollection()]
             [System.Collections.Generic.List[string]]$TargetNames
         )
 
