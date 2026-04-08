@@ -45,7 +45,7 @@ function Get-OptionalPropertyValue {
 
 function Add-IpValues {
     param(
-        [Parameter(Mandatory = $true)]
+        [AllowNull()]
         $Target,
 
         [Parameter(Mandatory = $false)]
