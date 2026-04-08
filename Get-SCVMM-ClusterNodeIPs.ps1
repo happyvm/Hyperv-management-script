@@ -53,6 +53,10 @@ function Get-IpValues {
         return @()
     }
 
+    if ($null -eq $Target) {
+        return
+    }
+
     if ($Value -is [System.Array]) {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
