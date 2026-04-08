@@ -6,16 +6,18 @@ Exports IP addresses used by each Hyper-V node managed by SCVMM.
 Connects to SCVMM, enumerates Hyper-V hosts (nodes), and exports role-based
 IP addresses to CSV.
 
-Role sourcing:
-  - Admin: VMHost IPAddress/IPAddresses + adapters marked UsedForManagement
-  - LiveMigration: Hyper-V migration networks on the host (Get-VMMigrationNetwork)
-  - ClusterTraffic: Failover cluster network interfaces for the node
-  - ClusterIPs: Cluster virtual IP address resources
+Sources used:
+  - Admin: SCVMM host IP + adapters marked UsedForManagement
+  - LiveMigration: Hyper-V migration subnets mapped to local host IPs
+  - ClusterTraffic: Failover cluster network interfaces (IPv4Addresses)
+  - ClusterIPs: Cluster IP Address resources -> Address parameter
 
 .NOTES
-- Requires the VirtualMachineManager PowerShell module.
-- For best results on Live Migration / Cluster traffic, run from a system that
-  can query Hyper-V and Failover Clustering on the hosts/clusters.
+- Requires VirtualMachineManager module.
+- For best results, run on a management server that can query:
+    * SCVMM
+    * Hyper-V hosts
+    * Failover clusters
 #>
 [CmdletBinding()]
 param(
@@ -103,64 +105,26 @@ function Add-ValuesToSet {
     }
 }
 
-function Get-HostManagementIpsFromScvmm {
-    param(
-        [object]$VMHost,
-        [object]$AdminIps
-    )
+function Convert-IPv4ToUInt32 {
+    param([string]$IPAddress)
 
-    foreach ($prop in @('IPAddress', 'IPAddresses')) {
-        Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $VMHost -Property $prop)
-    }
-
-    try {
-        $physAdapters = @(Get-SCVMHostNetworkAdapter -VMHost $VMHost -ErrorAction SilentlyContinue)
-    }
-    catch {
-        $physAdapters = @()
-        Write-Verbose "Get-SCVMHostNetworkAdapter failed for '$($VMHost.Name)': $($_.Exception.Message)"
-    }
-
-    foreach ($adapter in $physAdapters) {
-        $usedForMgmt = Get-SafeProperty -Object $adapter -Property 'UsedForManagement'
-        if ($usedForMgmt -eq $true) {
-            foreach ($prop in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses', 'IPv4Address', 'IPv6Address')) {
-                Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $adapter -Property $prop)
-            }
-        }
-    }
-
-    try {
-        $vAdapters = @(Get-SCVMHostVirtualNetworkAdapter -VMHost $VMHost -ErrorAction SilentlyContinue)
-    }
-    catch {
-        $vAdapters = @()
-        Write-Verbose "Get-SCVMHostVirtualNetworkAdapter failed for '$($VMHost.Name)': $($_.Exception.Message)"
-    }
-
-    foreach ($adapter in $vAdapters) {
-        $usedForMgmt = Get-SafeProperty -Object $adapter -Property 'UsedForManagement'
-        if ($usedForMgmt -eq $true) {
-            foreach ($prop in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses', 'IPv4Address', 'IPv6Address')) {
-                Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $adapter -Property $prop)
-            }
-        }
-    }
+    $bytes = ([System.Net.IPAddress]::Parse($IPAddress)).GetAddressBytes()
+    [array]::Reverse($bytes)
+    return [BitConverter]::ToUInt32($bytes, 0)
 }
 
-function Get-LiveMigrationIps {
+function Test-IPv4InCidr {
     param(
-        [string]$ComputerName,
-        [object]$LiveMigrationIps
+        [string]$IPAddress,
+        [string]$Cidr
     )
 
-    try {
-        $migrationNetworks = @(Get-VMMigrationNetwork -ComputerName $ComputerName -ErrorAction Stop)
-        foreach ($net in $migrationNetworks) {
-            foreach ($prop in @('Subnet', 'Network', 'IPAddress', 'IPAddresses', 'Address')) {
-                Add-ValuesToSet -TargetSet $LiveMigrationIps -Value (Get-SafeProperty -Object $net -Property $prop)
-            }
-        }
+    if ([string]::IsNullOrWhiteSpace($IPAddress) -or [string]::IsNullOrWhiteSpace($Cidr)) {
+        return $false
+    }
+
+    if ($IPAddress -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
+        return $false
     }
     catch {
         Write-Verbose "Get-VMMigrationNetwork failed for '$ComputerName': $($_.Exception.Message)"
@@ -174,10 +138,144 @@ function Get-ClusterTrafficIps {
         [object]$ClusterTrafficIps
     )
 
+    if ($Cidr -notmatch '^(\d{1,3}(\.\d{1,3}){3})/(\d{1,2})$') {
+        return $false
+    }
+
+    $network = $Matches[1]
+    $prefix = [int]$Matches[3]
+
+    if ($prefix -lt 0 -or $prefix -gt 32) {
+        return $false
+    }
+
+    $ipValue = Convert-IPv4ToUInt32 -IPAddress $IPAddress
+    $netValue = Convert-IPv4ToUInt32 -IPAddress $network
+
+    $mask = if ($prefix -eq 0) { [uint32]0 } else { [uint32]::MaxValue -shl (32 - $prefix) }
+
+    return (($ipValue -band $mask) -eq ($netValue -band $mask))
+}
+
+function Get-HostManagementIpsFromScvmm {
+    param(
+        [object]$VMHost,
+        [object]$AdminIps
+    )
+
+    foreach ($prop in @('IPAddress', 'IPAddresses')) {
+        Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $VMHost -Property $prop)
+    }
+
+    try {
+        $physAdapters = @(Get-SCVMHostNetworkAdapter -VMHost $VMHost -ErrorAction Stop)
+    }
+    catch {
+        $physAdapters = @()
+        Write-Verbose "Get-SCVMHostNetworkAdapter failed for '$($VMHost.Name)': $($_.Exception.Message)"
+    }
+
+    foreach ($adapter in $physAdapters) {
+        if ((Get-SafeProperty -Object $adapter -Property 'UsedForManagement') -eq $true) {
+            foreach ($prop in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses', 'IPv4Address', 'IPv6Address')) {
+                Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $adapter -Property $prop)
+            }
+        }
+    }
+
+    try {
+        $vAdapters = @(Get-SCVMHostVirtualNetworkAdapter -VMHost $VMHost -ErrorAction Stop)
+    }
+    catch {
+        $vAdapters = @()
+        Write-Verbose "Get-SCVMHostVirtualNetworkAdapter failed for '$($VMHost.Name)': $($_.Exception.Message)"
+    }
+
+    foreach ($adapter in $vAdapters) {
+        if ((Get-SafeProperty -Object $adapter -Property 'UsedForManagement') -eq $true) {
+            foreach ($prop in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses', 'IPv4Address', 'IPv6Address')) {
+                Add-ValuesToSet -TargetSet $AdminIps -Value (Get-SafeProperty -Object $adapter -Property $prop)
+            }
+        }
+    }
+}
+
+function Get-LocalHostIPs {
+    param(
+        [string]$ComputerName
+    )
+
+    $ips = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    try {
+        $netIps = @(Get-NetIPAddress -CimSession $ComputerName -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object {
+                $_.IPAddress -and
+                $_.PrefixOrigin -ne 'WellKnown' -and
+                $_.IPAddress -notlike '169.254.*' -and
+                $_.IPAddress -ne '127.0.0.1'
+            })
+
+        foreach ($ip in $netIps) {
+            [void]$ips.Add($ip.IPAddress)
+        }
+    }
+    catch {
+        Write-Verbose "Get-NetIPAddress failed for '$ComputerName': $($_.Exception.Message)"
+    }
+
+    return $ips
+}
+
+function Get-LiveMigrationIps {
+    param(
+        [string]$ComputerName,
+        [object]$LiveMigrationIps
+    )
+
+    $migrationSubnets = @()
+
+    try {
+        $migrationNetworks = @(Get-VMMigrationNetwork -ComputerName $ComputerName -ErrorAction Stop)
+        foreach ($net in $migrationNetworks) {
+            $subnet = Get-SafeProperty -Object $net -Property 'Subnet'
+            if (-not [string]::IsNullOrWhiteSpace($subnet)) {
+                $migrationSubnets += $subnet
+            }
+        }
+    }
+    catch {
+        Write-Verbose "Get-VMMigrationNetwork failed for '$ComputerName': $($_.Exception.Message)"
+        return
+    }
+
+    if (-not $migrationSubnets -or $migrationSubnets.Count -eq 0) {
+        Write-Verbose "No migration subnets returned for '$ComputerName'"
+        return
+    }
+
+    $localIPs = Get-LocalHostIPs -ComputerName $ComputerName
+
+    foreach ($ip in $localIPs) {
+        foreach ($subnet in $migrationSubnets) {
+            if (Test-IPv4InCidr -IPAddress $ip -Cidr $subnet) {
+                [void]$LiveMigrationIps.Add($ip)
+            }
+        }
+    }
+}
+
+function Get-ClusterTrafficIps {
+    param(
+        [string]$ClusterName,
+        [string]$NodeName,
+        [object]$ClusterTrafficIps
+    )
+
     try {
         $clusterIfs = @(Get-ClusterNetworkInterface -Cluster $ClusterName -Node $NodeName -ErrorAction Stop)
         foreach ($if in $clusterIfs) {
-            foreach ($prop in @('IPv4Addresses', 'IPv6Addresses', 'IPAddresses', 'Address', 'IPAddress')) {
+            foreach ($prop in @('IPv4Addresses', 'IPAddresses', 'IPAddress')) {
                 Add-ValuesToSet -TargetSet $ClusterTrafficIps -Value (Get-SafeProperty -Object $if -Property $prop)
             }
         }
@@ -194,14 +292,16 @@ function Get-ClusterVirtualIps {
     )
 
     try {
-        $ipResources = @(Get-ClusterResource -Cluster $ClusterName -ErrorAction Stop | Where-Object { $_.ResourceType -eq 'IP Address' })
+        $ipResources = @(Get-ClusterResource -Cluster $ClusterName -ErrorAction Stop |
+            Where-Object { $_.ResourceType -eq 'IP Address' })
+
         foreach ($res in $ipResources) {
             try {
                 $addressParam = Get-ClusterParameter -InputObject $res -Name 'Address' -ErrorAction Stop
                 Add-ValuesToSet -TargetSet $ClusterIps -Value $addressParam.Value
             }
             catch {
-                Write-Verbose "Could not read Address parameter from cluster IP resource '$($res.Name)' on '$ClusterName': $($_.Exception.Message)"
+                Write-Verbose "Could not read Address from cluster IP resource '$($res.Name)' on '$ClusterName': $($_.Exception.Message)"
             }
         }
     }
@@ -230,21 +330,14 @@ $rows = foreach ($vmHost in $vmHosts) {
         'Standalone'
     }
 
-    # 1) Admin IPs from SCVMM host object + adapters explicitly marked for management
     Get-HostManagementIpsFromScvmm -VMHost $vmHost -AdminIps $adminIps
-
-    # 2) Live Migration IPs from Hyper-V migration network configuration
     Get-LiveMigrationIps -ComputerName $vmHost.Name -LiveMigrationIps $liveMigrationIps
 
-    # 3) Cluster traffic IPs from cluster network interfaces
     if ($clusterName -ne 'Standalone') {
         Get-ClusterTrafficIps -ClusterName $clusterName -NodeName $vmHost.Name -ClusterTrafficIps $clusterTrafficIps
-
-        # 4) Cluster virtual IP(s)
         Get-ClusterVirtualIps -ClusterName $clusterName -ClusterIps $clusterIps
     }
 
-    # 5) Fallback node/admin DNS resolution if still empty
     if ($adminIps.Count -eq 0) {
         try {
             foreach ($addr in [System.Net.Dns]::GetHostAddresses($vmHost.Name)) {
