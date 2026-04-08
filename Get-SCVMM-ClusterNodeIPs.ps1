@@ -105,8 +105,9 @@ function Get-AdapterRole {
     $connName    = Get-SafeProperty -Object $Adapter -Property 'ConnectionName'
     $vmNetName   = Get-SafeProperty -Object $Adapter -Property 'VMNetworkName'
 
-    $text = (($lnName, $adapterName, $description, $connName, $vmNetName |
-              Where-Object { $_ }) -join ' ').ToLowerInvariant()
+    $parts = @($lnName, $adapterName, $description, $connName, $vmNetName) |
+             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $text  = if ($parts) { ($parts -join ' ').ToLowerInvariant() } else { '' }
 
     if ($text -match 'live.?migr|livemig|\blm\b')          { return 'LiveMigration' }
     if ($text -match 'cluster|heartbeat|\bcsv\b')           { return 'ClusterTraffic' }
@@ -122,10 +123,10 @@ function Get-AdapterRole {
 function Add-AdapterIps {
     param(
         [object]$Adapter,
-        [System.Collections.Generic.HashSet[string]]$AdminIps,
-        [System.Collections.Generic.HashSet[string]]$LiveMigrationIps,
-        [System.Collections.Generic.HashSet[string]]$ClusterTrafficIps,
-        [System.Collections.Generic.HashSet[string]]$NodeIps
+        [object]$AdminIps,
+        [object]$LiveMigrationIps,
+        [object]$ClusterTrafficIps,
+        [object]$NodeIps
     )
 
     $role = Get-AdapterRole -Adapter $Adapter
@@ -147,8 +148,8 @@ function Add-AdapterIps {
 # Join a HashSet into a semicolon-separated string, or null if empty.
 # ---------------------------------------------------------------------------
 function Join-IpSet {
-    param([System.Collections.Generic.HashSet[string]]$Set)
-    if ($Set.Count -eq 0) { return $null }
+    param([object]$Set)
+    if ($null -eq $Set -or $Set.Count -eq 0) { return $null }
     return (@($Set | Sort-Object) -join ';')
 }
 
