@@ -113,8 +113,10 @@ $rows = foreach ($vmHost in $hosts) {
         }
     }
 
-    $uniqueIps = $ips |
-        Sort-Object -Unique
+    $uniqueIps = @(
+        $ips |
+            Sort-Object -Unique
+    )
 
     if ($uniqueIps.Count -eq 0) {
         [pscustomobject]@{
