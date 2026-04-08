@@ -221,11 +221,13 @@ $rows = foreach ($vmHost in $vmHosts) {
                 [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'NetworkName')
             )
 
+            # HashSet objects are enumerable; emit them as single objects (NoEnumerate)
+            # so an empty set does not collapse to $null through switch output.
             $roleSet = switch ($role) {
-                'Admin' { $adminIps; break }
-                'LiveMigration' { $liveMigrationIps; break }
-                'ClusterTraffic' { $clusterTrafficIps; break }
-                default { $nodeIps; break }
+                'Admin' { Write-Output -NoEnumerate $adminIps; break }
+                'LiveMigration' { Write-Output -NoEnumerate $liveMigrationIps; break }
+                'ClusterTraffic' { Write-Output -NoEnumerate $clusterTrafficIps; break }
+                default { Write-Output -NoEnumerate $nodeIps; break }
             }
 
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Address', 'IPv6Address', 'IPv4Addresses', 'IPv6Addresses', 'Address', 'Addresses')) {
