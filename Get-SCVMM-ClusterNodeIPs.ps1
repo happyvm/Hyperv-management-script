@@ -75,6 +75,70 @@ function Get-IpValues {
     return @()
 }
 
+function Get-NetworkRoleFromText {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string[]]$TextValues
+    )
+
+    $text = (($TextValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' ').ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return 'Node'
+    }
+
+    if ($text -match 'live[\s\-_]*migration|\blm\b') {
+        return 'LiveMigration'
+    }
+
+    if ($text -match 'cluster|heartbeat|csv') {
+        return 'ClusterTraffic'
+    }
+
+    if ($text -match 'admin|mgmt|management|host') {
+        return 'Admin'
+    }
+
+    return 'Node'
+}
+
+function Add-IpEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[psobject]]$List,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.HashSet[string]]$KeySet,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Cluster,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Node,
+
+        [Parameter(Mandatory = $true)]
+        [string]$IP,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Role
+    )
+
+    if ([string]::IsNullOrWhiteSpace($IP)) {
+        return
+    }
+
+    $key = "$Cluster|$Node|$IP|$Role"
+    if (-not $KeySet.Add($key)) {
+        return
+    }
+
+    $List.Add([pscustomobject]@{
+            Cluster = $Cluster
+            Node    = $Node
+            IP      = $IP
+            Role    = $Role
+        }) | Out-Null
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -87,13 +151,25 @@ $rows = foreach ($vmHost in $vmHosts) {
     $hostCluster = Get-OptionalPropertyValue -Object $vmHost -PropertyName 'HostCluster'
     $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { 'Standalone' }
 
-    $ipList = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $entries = [System.Collections.Generic.List[psobject]]::new()
+    $entryKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     # Collect candidate IP values from common SCVMM host properties.
     foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses', 'ManagementIPAddress')) {
         if ($vmHost.PSObject.Properties.Name -contains $propertyName) {
             foreach ($ipValue in (Get-IpValues -Value $vmHost.$propertyName)) {
-                [void]$ipList.Add($ipValue)
+                Add-IpEntry -List $entries -KeySet $entryKeys -Cluster $clusterName -Node $vmHost.Name -IP $ipValue -Role 'Admin'
+            }
+        }
+    }
+
+    # Try to capture cluster IPs, if present on the cluster object.
+    if ($hostCluster) {
+        foreach ($clusterIpProperty in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses', 'ClusterIPAddress', 'ManagementIPAddress', 'VirtualIPAddress')) {
+            if ($hostCluster.PSObject.Properties.Name -contains $clusterIpProperty) {
+                foreach ($ipValue in (Get-IpValues -Value $hostCluster.$clusterIpProperty)) {
+                    Add-IpEntry -List $entries -KeySet $entryKeys -Cluster $clusterName -Node '(cluster)' -IP $ipValue -Role 'Cluster'
+                }
             }
         }
     }
@@ -102,40 +178,41 @@ $rows = foreach ($vmHost in $vmHosts) {
     if ($hostNetworkAdapterCmd) {
         $adapters = @(Get-SCVMHostNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue)
         foreach ($adapter in $adapters) {
+            $role = Get-NetworkRoleFromText -TextValues @(
+                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'Name'),
+                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'Description'),
+                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'ConnectionName'),
+                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'LogicalNetwork'),
+                [string](Get-OptionalPropertyValue -Object $adapter -PropertyName 'VMNetwork')
+            )
+
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses')) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
                     foreach ($ipValue in (Get-IpValues -Value $adapter.$propertyName)) {
-                        [void]$ipList.Add($ipValue)
+                        Add-IpEntry -List $entries -KeySet $entryKeys -Cluster $clusterName -Node $vmHost.Name -IP $ipValue -Role $role
                     }
                 }
             }
         }
     }
 
-    $uniqueIps = @($ipList | Sort-Object)
-
-    if ($uniqueIps.Count -eq 0) {
+    if ($entries.Count -eq 0) {
         [pscustomobject]@{
             Cluster = $clusterName
             Node    = $vmHost.Name
             IP      = $null
+            Role    = 'Unknown'
         }
         continue
     }
 
-    foreach ($ip in $uniqueIps) {
-        [pscustomobject]@{
-            Cluster = $clusterName
-            Node    = $vmHost.Name
-            IP      = $ip
-        }
-    }
+    $entries
 }
 
 $rows = @($rows | Where-Object { $null -ne $_ })
 
 $rows |
-    Sort-Object Cluster, Node, IP |
+    Sort-Object Cluster, Node, Role, IP -Unique |
     Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
 
 Write-Host "Export completed: $OutputPath"
