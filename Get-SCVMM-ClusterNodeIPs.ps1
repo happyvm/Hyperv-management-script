@@ -132,11 +132,25 @@ function Get-NetworkRoleFromText {
 function Get-TextValues {
     param(
         [Parameter(Mandatory = $false)]
-        $Value
+        $Value,
+
+        [Parameter(Mandatory = $false)]
+        [int]$Depth = 0,
+
+        [Parameter(Mandatory = $false)]
+        [int]$MaxDepth = 3
     )
 
     if ($null -eq $Value) {
         return @()
+    }
+
+    if ($Depth -ge $MaxDepth) {
+        $renderedDepth = [string]$Value
+        if ([string]::IsNullOrWhiteSpace($renderedDepth)) {
+            return @()
+        }
+        return @($renderedDepth)
     }
 
     if ($Value -is [string]) {
@@ -149,7 +163,7 @@ function Get-TextValues {
     if ($Value -is [System.Collections.IEnumerable]) {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
-            foreach ($text in (Get-TextValues -Value $item)) {
+            foreach ($text in (Get-TextValues -Value $item -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                 $results.Add($text) | Out-Null
             }
         }
@@ -160,7 +174,7 @@ function Get-TextValues {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($propertyName in @('Name', 'Description', 'ConnectionName', 'NetworkName', 'LogicalNetwork', 'LogicalNetworkDefinition', 'VMNetwork', 'Label', 'DisplayName', 'Role', 'RoleType', 'Usage')) {
             if ($Value.PSObject.Properties.Name -contains $propertyName) {
-                foreach ($text in (Get-TextValues -Value $Value.$propertyName)) {
+                foreach ($text in (Get-TextValues -Value $Value.$propertyName -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                     $results.Add($text) | Out-Null
                 }
             }
