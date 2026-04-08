@@ -166,6 +166,37 @@ $remoteCollector = {
         return $normalized
     }
 
+    function Get-PreferredLunId {
+        param(
+            [Parameter(Mandatory = $true)]
+            $Disk
+        )
+
+        $isPureStorageDisk = $false
+        foreach ($propertyName in @('FriendlyName', 'Model', 'Location', 'Path')) {
+            $value = $Disk.$propertyName
+            if (-not [string]::IsNullOrWhiteSpace([string]$value) -and [string]$value -match 'pure') {
+                $isPureStorageDisk = $true
+                break
+            }
+        }
+
+        # For Pure Storage volumes, prefer serial because it aligns better with array-side volume identity.
+        if ($isPureStorageDisk -and -not [string]::IsNullOrWhiteSpace([string]$Disk.SerialNumber)) {
+            return [string]$Disk.SerialNumber
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$Disk.UniqueId)) {
+            return [string]$Disk.UniqueId
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$Disk.SerialNumber)) {
+            return [string]$Disk.SerialNumber
+        }
+
+        return $null
+    }
+
     $clusterCmd = Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue
     $volumeCmd = Get-Command -Name Get-Volume -ErrorAction SilentlyContinue
     $partitionCmd = Get-Command -Name Get-Partition -ErrorAction SilentlyContinue
@@ -244,13 +275,7 @@ $remoteCollector = {
                         $diskFriendlyName = $disk.FriendlyName
                         $diskLocation = $disk.Location
                         $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
-
-                        # Prefer array-side identifier (VPD/WWID-like value) instead of host-side SCSI LUN index.
-                        if (-not [string]::IsNullOrWhiteSpace([string]$disk.UniqueId)) {
-                            $lun = [string]$disk.UniqueId
-                        } elseif (-not [string]::IsNullOrWhiteSpace([string]$disk.SerialNumber)) {
-                            $lun = [string]$disk.SerialNumber
-                        }
+                        $lun = Get-PreferredLunId -Disk $disk
                     }
                 }
             }

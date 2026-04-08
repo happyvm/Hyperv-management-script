@@ -41,3 +41,9 @@ Use `-Delimiter ';'` (default) for semicolon-separated CSV, or `-Delimiter ','` 
 - ConnectedNetworks
 - HardwareVersion
 - HostingVolume
+
+## SCVMM cluster volume export
+
+Use `Get-SCVMM-ClusterVolumes.ps1` to export CSV volume details (including LUN-related identity) for SCVMM-managed Hyper-V clusters.
+
+For Pure Storage-backed disks, the script now prefers the disk serial number for the `LUN` column so the value maps more closely to Pure array-side volume identity.
