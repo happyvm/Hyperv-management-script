@@ -131,13 +131,20 @@ function Get-NetworkRoleFromText {
 
 function Add-IpToSet {
     param(
-        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.HashSet[string]]$Set,
+        [object]$Set,
 
         [Parameter(Mandatory = $false)]
         $Values
     )
+
+    if ($null -eq $Set) {
+        throw 'Set cannot be null.'
+    }
+
+    if (-not ($Set -is [System.Collections.Generic.HashSet[string]])) {
+        throw "Set must be of type HashSet[string]. Actual type: $($Set.GetType().FullName)"
+    }
 
     foreach ($ip in (Get-IpValues -Value $Values)) {
         if (-not [string]::IsNullOrWhiteSpace($ip)) {
@@ -148,10 +155,17 @@ function Add-IpToSet {
 
 function Join-IpSet {
     param(
-        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.HashSet[string]]$Set
+        [object]$Set
     )
+
+    if ($null -eq $Set) {
+        throw 'Set cannot be null.'
+    }
+
+    if (-not ($Set -is [System.Collections.Generic.HashSet[string]])) {
+        throw "Set must be of type HashSet[string]. Actual type: $($Set.GetType().FullName)"
+    }
 
     if ($Set.Count -eq 0) {
         return $null
