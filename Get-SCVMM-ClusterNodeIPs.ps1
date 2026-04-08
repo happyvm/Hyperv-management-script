@@ -43,17 +43,14 @@ function Get-OptionalPropertyValue {
     return $null
 }
 
-function Add-IpValues {
+function Get-IpValues {
     param(
-        [AllowNull()]
-        $Target,
-
         [Parameter(Mandatory = $false)]
         $Value
     )
 
     if ($null -eq $Value) {
-        return
+        return @()
     }
 
     if ($null -eq $Target) {
@@ -61,23 +58,26 @@ function Add-IpValues {
     }
 
     if ($Value -is [System.Array]) {
+        $results = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
-            Add-IpValues -Target $Target -Value $item
+            foreach ($nestedIp in (Get-IpValues -Value $item)) {
+                $results.Add($nestedIp) | Out-Null
+            }
         }
-        return
+        return $results.ToArray()
     }
 
     $text = [string]$Value
     if ([string]::IsNullOrWhiteSpace($text)) {
-        return
+        return @()
     }
 
     # Keep only valid IPv4/IPv6 values.
     if ($text -as [System.Net.IPAddress]) {
-        if ($Target -is [System.Collections.IList]) {
-            $Target.Add($text) | Out-Null
-        }
+        return @($text)
     }
+
+    return @()
 }
 
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
@@ -92,12 +92,14 @@ $rows = foreach ($vmHost in $hosts) {
     $hostCluster = Get-OptionalPropertyValue -Object $vmHost -PropertyName 'HostCluster'
     $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { 'Standalone' }
 
-    $ips = [System.Collections.Generic.List[string]]::new()
+    $ips = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
     # Collect candidate IP values from common SCVMM host properties.
     foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses', 'ManagementIPAddress')) {
         if ($vmHost.PSObject.Properties.Name -contains $propertyName) {
-            Add-IpValues -Target $ips -Value $vmHost.$propertyName
+            foreach ($ipValue in (Get-IpValues -Value $vmHost.$propertyName)) {
+                [void]$ips.Add($ipValue)
+            }
         }
     }
 
@@ -107,16 +109,15 @@ $rows = foreach ($vmHost in $hosts) {
         foreach ($adapter in $adapters) {
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses')) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
-                    Add-IpValues -Target $ips -Value $adapter.$propertyName
+                    foreach ($ipValue in (Get-IpValues -Value $adapter.$propertyName)) {
+                        [void]$ips.Add($ipValue)
+                    }
                 }
             }
         }
     }
 
-    $uniqueIps = @(
-        $ips |
-            Sort-Object -Unique
-    )
+    $uniqueIps = @($ips | Sort-Object)
 
     if ($uniqueIps.Count -eq 0) {
         [pscustomobject]@{
@@ -135,6 +136,8 @@ $rows = foreach ($vmHost in $hosts) {
         }
     }
 }
+
+$rows = @($rows)
 
 $rows |
     Sort-Object Cluster, Node, IP |
