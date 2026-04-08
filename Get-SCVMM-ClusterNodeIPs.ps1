@@ -404,10 +404,10 @@ function Get-RoleIpSet {
     )
 
     switch ($Role) {
-        'Admin' { return $AdminIps }
-        'LiveMigration' { return $LiveMigrationIps }
-        'ClusterTraffic' { return $ClusterTrafficIps }
-        default { return $NodeIps }
+        'Admin' { Write-Output -NoEnumerate $AdminIps; return }
+        'LiveMigration' { Write-Output -NoEnumerate $LiveMigrationIps; return }
+        'ClusterTraffic' { Write-Output -NoEnumerate $ClusterTrafficIps; return }
+        default { Write-Output -NoEnumerate $NodeIps; return }
     }
 }
 
