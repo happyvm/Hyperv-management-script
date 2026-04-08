@@ -140,6 +140,32 @@ function Get-ClusterHostNames {
 $remoteCollector = {
     param([string]$ExpectedClusterName)
 
+    function Normalize-ClusterName {
+        param([AllowNull()][string]$Name)
+
+        if ([string]::IsNullOrWhiteSpace($Name)) {
+            return $null
+        }
+
+        return $Name.Trim().ToLowerInvariant()
+    }
+
+    function Get-ShortClusterName {
+        param([AllowNull()][string]$Name)
+
+        $normalized = Normalize-ClusterName -Name $Name
+        if ([string]::IsNullOrWhiteSpace($normalized)) {
+            return $null
+        }
+
+        $dotIndex = $normalized.IndexOf('.')
+        if ($dotIndex -gt 0) {
+            return $normalized.Substring(0, $dotIndex)
+        }
+
+        return $normalized
+    }
+
     $clusterCmd = Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue
     $volumeCmd = Get-Command -Name Get-Volume -ErrorAction SilentlyContinue
     $partitionCmd = Get-Command -Name Get-Partition -ErrorAction SilentlyContinue
@@ -160,7 +186,19 @@ $remoteCollector = {
         }
     }
 
-    if ($ExpectedClusterName -and $cluster.Name -ne $ExpectedClusterName) {
+    $actualClusterName = Normalize-ClusterName -Name $cluster.Name
+    $expectedClusterNameNormalized = Normalize-ClusterName -Name $ExpectedClusterName
+    $actualClusterShortName = Get-ShortClusterName -Name $cluster.Name
+    $expectedClusterShortName = Get-ShortClusterName -Name $ExpectedClusterName
+
+    $namesMatch =
+        $expectedClusterNameNormalized -and
+        (
+            $actualClusterName -eq $expectedClusterNameNormalized -or
+            $actualClusterShortName -eq $expectedClusterShortName
+        )
+
+    if ($ExpectedClusterName -and (-not $namesMatch)) {
         return [pscustomobject]@{
             RecordType = 'Error'
             Error      = "Connected node belongs to cluster '$($cluster.Name)' but expected '$ExpectedClusterName'."
@@ -207,11 +245,11 @@ $remoteCollector = {
                         $diskLocation = $disk.Location
                         $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
 
-                        if ($diskLocation) {
-                            $match = [regex]::Match($diskLocation, 'LUN\s*(\d+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-                            if ($match.Success) {
-                                $lun = [int]$match.Groups[1].Value
-                            }
+                        # Prefer array-side identifier (VPD/WWID-like value) instead of host-side SCSI LUN index.
+                        if (-not [string]::IsNullOrWhiteSpace([string]$disk.UniqueId)) {
+                            $lun = [string]$disk.UniqueId
+                        } elseif (-not [string]::IsNullOrWhiteSpace([string]$disk.SerialNumber)) {
+                            $lun = [string]$disk.SerialNumber
                         }
                     }
                 }
