@@ -20,7 +20,6 @@ param(
     [string]$OutputPath = '.\\SCVMM-ClusterNodeIPs.csv'
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Get-OptionalPropertyValue {
@@ -53,11 +52,7 @@ function Get-IpValues {
         return @()
     }
 
-    if ($null -eq $Target) {
-        return
-    }
-
-    if ($Value -is [System.Array]) {
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
             foreach ($nestedIp in (Get-IpValues -Value $item)) {
@@ -105,7 +100,7 @@ $rows = foreach ($vmHost in $hosts) {
 
     # Collect candidate IP values from SCVMM host network adapter objects if cmdlet exists.
     if ($hostNetworkAdapterCmd) {
-        $adapters = Get-SCVMHostNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue
+        $adapters = @(Get-SCVMHostNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue)
         foreach ($adapter in $adapters) {
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses')) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
