@@ -22,6 +22,27 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+
+function Get-OptionalPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        return $Object.$PropertyName
+    }
+
+    return $null
+}
+
 function ConvertTo-GiB {
     param(
         [Parameter(Mandatory = $false)]
@@ -50,10 +71,15 @@ $vms = Get-SCVirtualMachine -VMMServer $server
 
 $rows = foreach ($vm in $vms) {
     # Many properties vary by SCVMM version; guard with null checks.
-    $hostName = if ($vm.VMHost -and $vm.VMHost.Name) { $vm.VMHost.Name } else { $null }
-    $clusterName = if ($vm.HostCluster -and $vm.HostCluster.Name) { $vm.HostCluster.Name } else { $null }
-    $cloudName = if ($vm.Cloud -and $vm.Cloud.Name) { $vm.Cloud.Name } else { $null }
-    $operatingSystem = if ($vm.OperatingSystem -and $vm.OperatingSystem.Name) { $vm.OperatingSystem.Name } else { $vm.OperatingSystem }
+    $vmHost = Get-OptionalPropertyValue -Object $vm -PropertyName 'VMHost'
+    $hostCluster = Get-OptionalPropertyValue -Object $vm -PropertyName 'HostCluster'
+    $cloud = Get-OptionalPropertyValue -Object $vm -PropertyName 'Cloud'
+    $operatingSystemRaw = Get-OptionalPropertyValue -Object $vm -PropertyName 'OperatingSystem'
+
+    $hostName = if ($vmHost -and $vmHost.Name) { $vmHost.Name } else { $null }
+    $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { $null }
+    $cloudName = if ($cloud -and $cloud.Name) { $cloud.Name } else { $null }
+    $operatingSystem = if ($operatingSystemRaw -and $operatingSystemRaw.Name) { $operatingSystemRaw.Name } else { $operatingSystemRaw }
 
     # Memory is usually exposed in MB on SCVMM VM objects.
     $memoryGb = ConvertTo-GiB -Value $vm.Memory -Unit 'MB'
