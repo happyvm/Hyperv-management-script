@@ -63,34 +63,6 @@ function Resolve-LunFromLocation {
     return $null
 }
 
-function New-VolumeRow {
-    param(
-        [string]$Cluster,
-        [string]$VolumeName,
-        [string]$VolumePath,
-        [string]$OwnerNode,
-        $DiskNumber,
-        [string]$DiskFriendlyName,
-        [string]$DiskLocation,
-        $LUN,
-        $SizeGB,
-        [string]$DataSource
-    )
-
-    [pscustomobject]@{
-        Cluster          = $Cluster
-        VolumeName       = $VolumeName
-        VolumePath       = $VolumePath
-        OwnerNode        = $OwnerNode
-        DiskNumber       = $DiskNumber
-        DiskFriendlyName = $DiskFriendlyName
-        DiskLocation     = $DiskLocation
-        LUN              = $LUN
-        SizeGB           = $SizeGB
-        DataSource       = $DataSource
-    }
-}
-
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
