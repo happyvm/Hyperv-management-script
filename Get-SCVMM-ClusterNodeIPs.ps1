@@ -131,6 +131,7 @@ function Get-NetworkRoleFromText {
 
 function Add-IpToSet {
     param(
+        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
         [System.Collections.Generic.HashSet[string]]$Set,
 
@@ -147,6 +148,7 @@ function Add-IpToSet {
 
 function Join-IpSet {
     param(
+        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
         [System.Collections.Generic.HashSet[string]]$Set
     )
