@@ -5,7 +5,8 @@ Exports cluster volumes and LUN-related details for SCVMM-managed Hyper-V cluste
 .DESCRIPTION
 Connects to SCVMM to enumerate host clusters and cluster nodes. For each cluster,
 this script tries to connect over WinRM to one SCVMM-managed host from that cluster,
-then runs FailoverClusters/Storage cmdlets remotely to collect CSV/disk/LUN data.
+then runs FailoverClusters/Storage cmdlets in that node's local cluster context
+to collect CSV/disk/LUN data.
 
 If WinRM or required cmdlets are unavailable, the script falls back to exporting
 basic volume-like information from SCVMM object properties.
@@ -110,7 +111,7 @@ function Get-ClusterHostNames {
 }
 
 $remoteCollector = {
-    param([string]$ClusterName)
+    param([string]$ExpectedClusterName)
 
     $clusterCmd = Get-Command -Name Get-ClusterSharedVolume -ErrorAction SilentlyContinue
     $volumeCmd = Get-Command -Name Get-Volume -ErrorAction SilentlyContinue
@@ -124,7 +125,22 @@ $remoteCollector = {
         }
     }
 
-    $csvs = Get-ClusterSharedVolume -Cluster $ClusterName -ErrorAction SilentlyContinue
+    $cluster = Get-Cluster -ErrorAction SilentlyContinue
+    if (-not $cluster) {
+        return [pscustomobject]@{
+            RecordType = 'Error'
+            Error      = 'Unable to resolve local cluster context on remote host.'
+        }
+    }
+
+    if ($ExpectedClusterName -and $cluster.Name -ne $ExpectedClusterName) {
+        return [pscustomobject]@{
+            RecordType = 'Error'
+            Error      = "Connected node belongs to cluster '$($cluster.Name)' but expected '$ExpectedClusterName'."
+        }
+    }
+
+    $csvs = Get-ClusterSharedVolume -ErrorAction SilentlyContinue
     if (-not $csvs) {
         return [pscustomobject]@{
             RecordType = 'Error'
