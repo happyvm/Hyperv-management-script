@@ -59,7 +59,7 @@ function Get-IpValues {
                 $results.Add($nestedIp) | Out-Null
             }
         }
-        return $results.ToArray()
+        return @($results)
     }
 
     if ($Value -is [psobject] -and $Value -isnot [string]) {
@@ -73,7 +73,7 @@ function Get-IpValues {
         }
 
         if ($results.Count -gt 0) {
-            return $results.ToArray()
+            return @($results)
         }
     }
 
@@ -97,7 +97,7 @@ function Get-IpValues {
     }
 
     if ($resultSet.Count -gt 0) {
-        return $resultSet.ToArray()
+        return @($resultSet)
     }
 
     return @()
