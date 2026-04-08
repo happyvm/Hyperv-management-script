@@ -109,9 +109,9 @@ function Get-AdapterRole {
              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     $text  = if ($parts) { ($parts -join ' ').ToLowerInvariant() } else { '' }
 
-    if ($text -match 'live.?migr|livemig|\blm\b')          { return 'LiveMigration' }
-    if ($text -match 'cluster|heartbeat|\bcsv\b')           { return 'ClusterTraffic' }
-    if ($text -match 'storage|\bsmb\b|backup')              { return 'ClusterTraffic' }
+    if ($text -match 'live.?migr|livemig|\blm\b|migration')  { return 'LiveMigration' }
+    if ($text -match 'cluster|heartbeat|\bcsv\b|quorum')    { return 'ClusterTraffic' }
+    if ($text -match 'storage|\bsmb\b|backup|iscsi')        { return 'ClusterTraffic' }
     if ($text -match 'admin|mgmt|management|host.?mgmt')    { return 'Admin' }
 
     return 'Node'
@@ -175,15 +175,26 @@ $rows = foreach ($vmHost in $vmHosts) {
     # 1. Management IP from the VMHost object itself (most reliable).
     #    IPAddress is a single string in most SCVMM versions.
     # ------------------------------------------------------------------
-    foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $vmHost -Property 'IPAddress'))) {
-        [void]$adminIps.Add($ip)
-    }
-    foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $vmHost -Property 'IPAddresses'))) {
-        [void]$adminIps.Add($ip)
+    foreach ($prop in @('IPAddress', 'IPAddresses')) {
+        foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $vmHost -Property $prop))) {
+            [void]$adminIps.Add($ip)
+        }
     }
 
     # ------------------------------------------------------------------
-    # 2. Cluster virtual IP.
+    # 2. Live migration IPs — pulled directly from VMHost properties.
+    #    MigrationIPAddressList is set by SCVMM when migration networks
+    #    are configured and is the authoritative source.
+    # ------------------------------------------------------------------
+    foreach ($prop in @('MigrationIPAddressList', 'LiveMigrationIPAddressList',
+                        'MigrationIPAddress',     'LiveMigrationIPAddress')) {
+        foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $vmHost -Property $prop))) {
+            [void]$liveMigrationIps.Add($ip)
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 3. Cluster virtual IP and per-node cluster network IPs.
     # ------------------------------------------------------------------
     $hostCluster = Get-SafeProperty -Object $vmHost -Property 'HostCluster'
     $clusterName = if ($hostCluster -and (Get-SafeProperty -Object $hostCluster -Property 'Name')) {
@@ -193,15 +204,31 @@ $rows = foreach ($vmHost in $vmHosts) {
     }
 
     if ($hostCluster) {
+        # Virtual IP of the cluster itself (client access point)
         foreach ($prop in @('IPAddress', 'IPAddresses', 'ClusterIPAddress', 'VirtualIPAddress')) {
             foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $hostCluster -Property $prop))) {
                 [void]$clusterIps.Add($ip)
             }
         }
+
+        # Cluster networks expose per-node addresses for heartbeat / CSV traffic
+        $clusterNetworks = Get-SafeProperty -Object $hostCluster -Property 'ClusterNetworks'
+        if (-not $clusterNetworks) {
+            $clusterNetworks = Get-SafeProperty -Object $hostCluster -Property 'Networks'
+        }
+        if ($clusterNetworks) {
+            foreach ($net in @($clusterNetworks)) {
+                foreach ($prop in @('IPAddress', 'IPAddresses', 'Address')) {
+                    foreach ($ip in (Get-CleanIps -Value (Get-SafeProperty -Object $net -Property $prop))) {
+                        [void]$clusterTrafficIps.Add($ip)
+                    }
+                }
+            }
+        }
     }
 
     # ------------------------------------------------------------------
-    # 3. Physical host network adapters.
+    # 4. Physical host network adapters.
     #    These carry the per-NIC IP addresses and role flags.
     # ------------------------------------------------------------------
     try {
