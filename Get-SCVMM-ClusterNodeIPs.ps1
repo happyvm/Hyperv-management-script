@@ -23,6 +23,26 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-OptionalPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+        return $Object.$PropertyName
+    }
+
+    return $null
+}
+
 function Add-IpValues {
     param(
         [Parameter(Mandatory = $true)]
@@ -63,7 +83,8 @@ $hosts = Get-SCVMHost -VMMServer $server
 $hostNetworkAdapterCmd = Get-Command -Name Get-SCVMHostNetworkAdapter -ErrorAction SilentlyContinue
 
 $rows = foreach ($host in $hosts) {
-    $clusterName = if ($host.HostCluster -and $host.HostCluster.Name) { $host.HostCluster.Name } else { 'Standalone' }
+    $hostCluster = Get-OptionalPropertyValue -Object $host -PropertyName 'HostCluster'
+    $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { 'Standalone' }
 
     $ips = [System.Collections.Generic.List[string]]::new()
 
