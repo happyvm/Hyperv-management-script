@@ -45,14 +45,18 @@ function Get-OptionalPropertyValue {
 
 function Add-IpValues {
     param(
-        [Parameter(Mandatory = $true)]
-        [System.Collections.Generic.List[string]]$Target,
+        [AllowNull()]
+        $Target,
 
         [Parameter(Mandatory = $false)]
         $Value
     )
 
     if ($null -eq $Value) {
+        return
+    }
+
+    if ($null -eq $Target) {
         return
     }
 
@@ -70,7 +74,9 @@ function Add-IpValues {
 
     # Keep only valid IPv4/IPv6 values.
     if ($text -as [System.Net.IPAddress]) {
-        $Target.Add($text) | Out-Null
+        if ($Target -is [System.Collections.IList]) {
+            $Target.Add($text) | Out-Null
+        }
     }
 }
 
@@ -82,22 +88,22 @@ $hosts = Get-SCVMHost -VMMServer $server
 
 $hostNetworkAdapterCmd = Get-Command -Name Get-SCVMHostNetworkAdapter -ErrorAction SilentlyContinue
 
-$rows = foreach ($host in $hosts) {
-    $hostCluster = Get-OptionalPropertyValue -Object $host -PropertyName 'HostCluster'
+$rows = foreach ($vmHost in $hosts) {
+    $hostCluster = Get-OptionalPropertyValue -Object $vmHost -PropertyName 'HostCluster'
     $clusterName = if ($hostCluster -and $hostCluster.Name) { $hostCluster.Name } else { 'Standalone' }
 
     $ips = [System.Collections.Generic.List[string]]::new()
 
     # Collect candidate IP values from common SCVMM host properties.
     foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses', 'ManagementIPAddress')) {
-        if ($host.PSObject.Properties.Name -contains $propertyName) {
-            Add-IpValues -Target $ips -Value $host.$propertyName
+        if ($vmHost.PSObject.Properties.Name -contains $propertyName) {
+            Add-IpValues -Target $ips -Value $vmHost.$propertyName
         }
     }
 
     # Collect candidate IP values from SCVMM host network adapter objects if cmdlet exists.
     if ($hostNetworkAdapterCmd) {
-        $adapters = Get-SCVMHostNetworkAdapter -VMHost $host -ErrorAction SilentlyContinue
+        $adapters = Get-SCVMHostNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue
         foreach ($adapter in $adapters) {
             foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Addresses', 'IPv6Addresses')) {
                 if ($adapter.PSObject.Properties.Name -contains $propertyName) {
@@ -113,7 +119,7 @@ $rows = foreach ($host in $hosts) {
     if ($uniqueIps.Count -eq 0) {
         [pscustomobject]@{
             Cluster = $clusterName
-            Node    = $host.Name
+            Node    = $vmHost.Name
             IP      = $null
         }
         continue
@@ -122,7 +128,7 @@ $rows = foreach ($host in $hosts) {
     foreach ($ip in $uniqueIps) {
         [pscustomobject]@{
             Cluster = $clusterName
-            Node    = $host.Name
+            Node    = $vmHost.Name
             IP      = $ip
         }
     }
