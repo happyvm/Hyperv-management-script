@@ -84,8 +84,8 @@ function Get-ClusterHostNames {
         [Parameter(Mandatory = $true)]
         $Cluster,
 
-        [Parameter(Mandatory = $true)]
-        [object[]]$AllHosts
+        [AllowNull()]
+        [object[]]$AllHosts = @()
     )
 
     $clusterName = $Cluster.Name
@@ -94,32 +94,36 @@ function Get-ClusterHostNames {
     function Add-HostConnectionNames {
         param(
             [Parameter(Mandatory = $true)]
-            $HostObject,
-
-            [Parameter(Mandatory = $true)]
-            [AllowEmptyCollection()]
-            [System.Collections.Generic.List[string]]$TargetNames
+            $HostObject
         )
+
+        $results = [System.Collections.Generic.List[string]]::new()
 
         foreach ($propertyName in @('FullyQualifiedDomainName', 'FQDN', 'ComputerName', 'Name')) {
             $value = Get-OptionalPropertyValue -Object $HostObject -PropertyName $propertyName
             if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-                $TargetNames.Add([string]$value) | Out-Null
+                $results.Add([string]$value) | Out-Null
             }
         }
+
+        return $results
     }
 
     foreach ($h in $AllHosts) {
         $hostCluster = Get-OptionalPropertyValue -Object $h -PropertyName 'HostCluster'
         if ($hostCluster -and $hostCluster.Name -eq $clusterName) {
-            Add-HostConnectionNames -HostObject $h -TargetNames $names
+            foreach ($candidateName in (Add-HostConnectionNames -HostObject $h)) {
+                $names.Add($candidateName) | Out-Null
+            }
         }
     }
 
     $vmHosts = Get-OptionalPropertyValue -Object $Cluster -PropertyName 'VMHosts'
     if ($vmHosts) {
         foreach ($h in $vmHosts) {
-            Add-HostConnectionNames -HostObject $h -TargetNames $names
+            foreach ($candidateName in (Add-HostConnectionNames -HostObject $h)) {
+                $names.Add($candidateName) | Out-Null
+            }
         }
     }
 
