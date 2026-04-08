@@ -60,6 +60,7 @@ function New-VolumeRow {
         [string]$DiskLocation,
         $LUN,
         $SizeGB,
+        $FreeGB,
         [string]$DataSource,
         [string]$Comment
     )
@@ -74,6 +75,7 @@ function New-VolumeRow {
         DiskLocation     = $DiskLocation
         LUN              = $LUN
         SizeGB           = $SizeGB
+        FreeGB           = $FreeGB
         DataSource       = $DataSource
         Comment          = $Comment
     }
@@ -255,6 +257,7 @@ $remoteCollector = {
         $diskFriendlyName = $null
         $diskLocation = $null
         $diskSizeGb = $null
+        $diskFreeGb = $null
         $lun = $null
 
         if ($partitionPath) {
@@ -275,6 +278,7 @@ $remoteCollector = {
                         $diskFriendlyName = $disk.FriendlyName
                         $diskLocation = $disk.Location
                         $diskSizeGb = [math]::Round($disk.Size / 1GB, 2)
+                        $diskFreeGb = [math]::Round($volume.SizeRemaining / 1GB, 2)
                         $lun = Get-PreferredLunId -Disk $disk
                     }
                 }
@@ -291,6 +295,7 @@ $remoteCollector = {
             DiskLocation     = $diskLocation
             LUN              = $lun
             SizeGB           = $diskSizeGb
+            FreeGB           = $diskFreeGb
         }
     }
 }
@@ -326,12 +331,12 @@ $rows = foreach ($cluster in $clusters) {
         $volumes = $remoteResults | Where-Object { $_.RecordType -eq 'Volume' }
 
         foreach ($item in $volumes) {
-            New-VolumeRow -Cluster $clusterName -VolumeName $item.VolumeName -VolumePath $item.VolumePath -OwnerNode $item.OwnerNode -DiskNumber $item.DiskNumber -DiskFriendlyName $item.DiskFriendlyName -DiskLocation $item.DiskLocation -LUN $item.LUN -SizeGB $item.SizeGB -DataSource 'Remote-WinRM-FailoverClusters' -Comment "Collected from $remoteSource"
+            New-VolumeRow -Cluster $clusterName -VolumeName $item.VolumeName -VolumePath $item.VolumePath -OwnerNode $item.OwnerNode -DiskNumber $item.DiskNumber -DiskFriendlyName $item.DiskFriendlyName -DiskLocation $item.DiskLocation -LUN $item.LUN -SizeGB $item.SizeGB -FreeGB $item.FreeGB -DataSource 'Remote-WinRM-FailoverClusters' -Comment "Collected from $remoteSource"
         }
 
         if (-not $volumes -and $errors) {
             foreach ($err in $errors) {
-                New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'Remote-WinRM-Error' -Comment $err.Error
+                New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -FreeGB $null -DataSource 'Remote-WinRM-Error' -Comment $err.Error
             }
         }
 
@@ -362,13 +367,13 @@ $rows = foreach ($cluster in $clusters) {
                 $owner = $owner.Name
             }
 
-            New-VolumeRow -Cluster $clusterName -VolumeName $name -VolumePath $path -OwnerNode $owner -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback' -Comment 'WinRM or required remote cmdlets unavailable'
+            New-VolumeRow -Cluster $clusterName -VolumeName $name -VolumePath $path -OwnerNode $owner -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -FreeGB $null -DataSource 'SCVMM-Fallback' -Comment 'WinRM or required remote cmdlets unavailable'
             $generatedRows++
         }
     }
 
     if ($generatedRows -eq 0) {
-        New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -DataSource 'SCVMM-Fallback-NoVolumePropertyFound' -Comment 'No volume-like properties found on SCVMM cluster object'
+        New-VolumeRow -Cluster $clusterName -VolumeName $null -VolumePath $null -OwnerNode $null -DiskNumber $null -DiskFriendlyName $null -DiskLocation $null -LUN $null -SizeGB $null -FreeGB $null -DataSource 'SCVMM-Fallback-NoVolumePropertyFound' -Comment 'No volume-like properties found on SCVMM cluster object'
     }
 }
 
