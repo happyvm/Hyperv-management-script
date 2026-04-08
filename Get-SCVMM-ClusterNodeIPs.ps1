@@ -36,7 +36,13 @@ function Get-OptionalPropertyValue {
     }
 
     if ($Object.PSObject.Properties.Name -contains $PropertyName) {
-        return $Object.$PropertyName
+        try {
+            return $Object.$PropertyName
+        }
+        catch {
+            Write-Verbose "Could not read property '$PropertyName' from object of type '$($Object.GetType().FullName)': $($_.Exception.Message)"
+            return $null
+        }
     }
 
     return $null
