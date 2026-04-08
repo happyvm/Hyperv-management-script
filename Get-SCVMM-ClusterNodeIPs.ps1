@@ -273,10 +273,45 @@ function Add-AdapterIpCandidates {
         'VMHostNetworkAdapterIPAddresses',
         'VirtualNetworkAdapter',
         'VMHostVirtualNetworkAdapter',
-        'HostVirtualNetworkAdapter'
+        'HostVirtualNetworkAdapter',
+        'VirtualSwitchInterface'
     )) {
         if ($Adapter.PSObject.Properties.Name -contains $nestedProperty) {
             Add-IpToSet -Set $Set -Values $Adapter.$nestedProperty
+        }
+    }
+}
+
+function Add-VirtualSwitchInterfaceIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Set,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Adapter
+    )
+
+    foreach ($switchProperty in @(
+        'VirtualSwitch',
+        'VMHostVirtualSwitch',
+        'HostVirtualSwitch',
+        'LogicalSwitch',
+        'VirtualSwitchInterface'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $switchProperty) {
+            Add-IpToSet -Set $Set -Values $Adapter.$switchProperty
+        }
+    }
+
+    foreach ($interfaceCollectionProperty in @(
+        'VirtualSwitchInterfaces',
+        'VMHostVirtualNetworkAdapters',
+        'HostVirtualNetworkAdapters',
+        'VirtualNetworkAdapters',
+        'NetworkAdapters'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $interfaceCollectionProperty) {
+            Add-IpToSet -Set $Set -Values $Adapter.$interfaceCollectionProperty
         }
     }
 }
@@ -351,6 +386,7 @@ $rows = foreach ($vmHost in $vmHosts) {
             }
 
             Add-AdapterIpCandidates -Set $roleSet -Adapter $adapter
+            Add-VirtualSwitchInterfaceIpCandidates -Set $roleSet -Adapter $adapter
         }
     }
 
