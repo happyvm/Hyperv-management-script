@@ -56,6 +56,9 @@ Use `Get-SCVMM-ClusterNodeIPs.ps1` to export IPs for:
 - Live migration network IPs
 - Cluster traffic IPs
 - Cluster virtual/service IPs (when exposed by SCVMM)
+- Virtual switch interface IPs exposed on host adapters/switch objects
+- Additional switch-level IP recovery via SCVMM virtual switch / virtual adapter cmdlets when available
+- DNS host-name fallback when SCVMM adapter/switch objects expose no IPs
 
 The CSV now exports one row per node with role-based columns:
 

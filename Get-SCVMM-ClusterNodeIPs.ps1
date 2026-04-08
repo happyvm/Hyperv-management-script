@@ -45,17 +45,27 @@ function Get-OptionalPropertyValue {
 function Get-IpValues {
     param(
         [Parameter(Mandatory = $false)]
-        $Value
+        $Value,
+
+        [Parameter(Mandatory = $false)]
+        [int]$Depth = 0,
+
+        [Parameter(Mandatory = $false)]
+        [int]$MaxDepth = 4
     )
 
     if ($null -eq $Value) {
         return @()
     }
 
+    if ($Depth -ge $MaxDepth) {
+        return @()
+    }
+
     if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($item in $Value) {
-            foreach ($nestedIp in (Get-IpValues -Value $item)) {
+            foreach ($nestedIp in (Get-IpValues -Value $item -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                 $results.Add($nestedIp) | Out-Null
             }
         }
@@ -66,7 +76,15 @@ function Get-IpValues {
         $results = [System.Collections.Generic.List[string]]::new()
         foreach ($propertyName in @('IPAddress', 'IPAddresses', 'IPv4Address', 'IPv6Address', 'IPv4Addresses', 'IPv6Addresses', 'Address', 'Addresses')) {
             if ($Value.PSObject.Properties.Name -contains $propertyName) {
-                foreach ($nestedIp in (Get-IpValues -Value $Value.$propertyName)) {
+                foreach ($nestedIp in (Get-IpValues -Value $Value.$propertyName -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
+                    $results.Add($nestedIp) | Out-Null
+                }
+            }
+        }
+
+        foreach ($property in @($Value.PSObject.Properties)) {
+            if ($property.Name -match '(?i)ip|address') {
+                foreach ($nestedIp in (Get-IpValues -Value $property.Value -Depth ($Depth + 1) -MaxDepth $MaxDepth)) {
                     $results.Add($nestedIp) | Out-Null
                 }
             }
@@ -91,8 +109,27 @@ function Get-IpValues {
 
     # Also parse lists and embedded text containing IP tokens.
     foreach ($token in ($text -split '[,\s;]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-        if ($token -as [System.Net.IPAddress]) {
-            [void]$resultSet.Add($token)
+        $candidateToken = $token.Trim('[](){}')
+        if ($candidateToken -match '/') {
+            $candidateToken = $candidateToken.Split('/')[0]
+        }
+        if ($candidateToken -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidateToken)
+        }
+    }
+
+    # Fallback regex scan for embedded IPv4 and IPv6 tokens inside arbitrary text.
+    foreach ($ipv4 in [System.Text.RegularExpressions.Regex]::Matches($text, '(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)')) {
+        $candidate = $ipv4.Value
+        if ($candidate -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidate)
+        }
+    }
+
+    foreach ($ipv6 in [System.Text.RegularExpressions.Regex]::Matches($text, '(?i)(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-f:])')) {
+        $candidate = $ipv6.Value.Trim(':')
+        if ($candidate -as [System.Net.IPAddress]) {
+            [void]$resultSet.Add($candidate)
         }
     }
 
@@ -273,11 +310,71 @@ function Add-AdapterIpCandidates {
         'VMHostNetworkAdapterIPAddresses',
         'VirtualNetworkAdapter',
         'VMHostVirtualNetworkAdapter',
-        'HostVirtualNetworkAdapter'
+        'HostVirtualNetworkAdapter',
+        'VirtualSwitchInterface'
     )) {
         if ($Adapter.PSObject.Properties.Name -contains $nestedProperty) {
             Add-IpToSet -Set $Set -Values $Adapter.$nestedProperty
         }
+    }
+}
+
+function Add-VirtualSwitchInterfaceIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Set,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Adapter
+    )
+
+    foreach ($switchProperty in @(
+        'VirtualSwitch',
+        'VMHostVirtualSwitch',
+        'HostVirtualSwitch',
+        'LogicalSwitch',
+        'VirtualSwitchInterface'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $switchProperty) {
+            Add-IpToSet -Set $Set -Values $Adapter.$switchProperty
+        }
+    }
+
+    foreach ($interfaceCollectionProperty in @(
+        'VirtualSwitchInterfaces',
+        'VMHostVirtualNetworkAdapters',
+        'HostVirtualNetworkAdapters',
+        'VirtualNetworkAdapters',
+        'NetworkAdapters'
+    )) {
+        if ($Adapter.PSObject.Properties.Name -contains $interfaceCollectionProperty) {
+            Add-IpToSet -Set $Set -Values $Adapter.$interfaceCollectionProperty
+        }
+    }
+}
+
+function Add-ResolvedHostIpCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Set,
+
+        [Parameter(Mandatory = $false)]
+        [string]$HostName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HostName)) {
+        return
+    }
+
+    try {
+        foreach ($address in [System.Net.Dns]::GetHostAddresses($HostName)) {
+            if ($null -ne $address) {
+                [void]$Set.Add($address.IPAddressToString)
+            }
+        }
+    }
+    catch {
+        Write-Verbose "DNS lookup failed for host '$HostName': $($_.Exception.Message)"
     }
 }
 
@@ -288,6 +385,8 @@ Write-Verbose 'Querying Hyper-V hosts (nodes) from SCVMM...'
 $vmHosts = @(Get-SCVMHost -VMMServer $server)
 
 $hostNetworkAdapterCmd = Get-Command -Name Get-SCVMHostNetworkAdapter -ErrorAction SilentlyContinue
+$hostVirtualAdapterCmd = Get-Command -Name Get-SCVMHostVirtualNetworkAdapter -ErrorAction SilentlyContinue
+$hostVirtualSwitchCmd = Get-Command -Name Get-SCVMHostVirtualSwitch -ErrorAction SilentlyContinue
 
 $rows = foreach ($vmHost in $vmHosts) {
     $hostCluster = Get-OptionalPropertyValue -Object $vmHost -PropertyName 'HostCluster'
@@ -351,7 +450,29 @@ $rows = foreach ($vmHost in $vmHosts) {
             }
 
             Add-AdapterIpCandidates -Set $roleSet -Adapter $adapter
+            Add-VirtualSwitchInterfaceIpCandidates -Set $roleSet -Adapter $adapter
         }
+    }
+
+    if ($hostVirtualAdapterCmd) {
+        $virtualAdapters = @(Get-SCVMHostVirtualNetworkAdapter -VMHost $vmHost -ErrorAction SilentlyContinue)
+        foreach ($virtualAdapter in $virtualAdapters) {
+            Add-AdapterIpCandidates -Set $nodeIps -Adapter $virtualAdapter
+            Add-VirtualSwitchInterfaceIpCandidates -Set $nodeIps -Adapter $virtualAdapter
+        }
+    }
+
+    if ($hostVirtualSwitchCmd) {
+        $virtualSwitches = @(Get-SCVMHostVirtualSwitch -VMHost $vmHost -ErrorAction SilentlyContinue)
+        foreach ($virtualSwitch in $virtualSwitches) {
+            Add-IpToSet -Set $nodeIps -Values $virtualSwitch
+            Add-VirtualSwitchInterfaceIpCandidates -Set $nodeIps -Adapter $virtualSwitch
+        }
+    }
+
+    if ($adminIps.Count -eq 0 -and $nodeIps.Count -eq 0) {
+        Add-ResolvedHostIpCandidates -Set $adminIps -HostName $vmHost.Name
+        Add-ResolvedHostIpCandidates -Set $nodeIps -HostName $vmHost.FullyQualifiedDomainName
     }
 
     [pscustomobject]@{
