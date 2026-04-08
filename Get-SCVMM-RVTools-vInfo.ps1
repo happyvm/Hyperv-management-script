@@ -16,7 +16,11 @@ param(
     [string]$VMMServer,
 
     [Parameter(Mandatory = $false)]
-    [string]$OutputPath = ".\\SCVMM-vInfo.csv"
+    [string]$OutputPath = ".\\SCVMM-vInfo.csv",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet(',', ';', "`t")]
+    [string]$Delimiter = ';'
 )
 
 Set-StrictMode -Version Latest
@@ -119,6 +123,34 @@ function Join-UniqueValues {
     return ($result -join '; ')
 }
 
+function Convert-SizeValueToBytes {
+    param(
+        [Parameter(Mandatory = $false)]
+        [object]$Value,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Bytes', 'MB', 'KB')]
+        [string]$Unit = 'Bytes'
+    )
+
+    if ($null -eq $Value -or $Value -eq '') {
+        return $null
+    }
+
+    $numeric = [double]$Value
+
+    if ($Unit -eq 'MB') {
+        return $numeric * 1MB
+    }
+
+    if ($Unit -eq 'KB') {
+        return $numeric * 1KB
+    }
+
+    # Most SCVMM storage size properties are exposed as Bytes when no unit is in the name.
+    return $numeric
+}
+
 function Get-DriveItems {
     param(
         [Parameter(Mandatory = $true)]
@@ -159,6 +191,36 @@ function Get-NicItems {
     }
 }
 
+function Get-ClusterNameForVm {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Vm
+    )
+
+    $clusterName = Get-FirstAvailablePropertyValue -Object $Vm -PropertyNames @(
+        'HostClusterName',
+        'ClusterName'
+    )
+    if ($null -ne $clusterName) {
+        return $clusterName
+    }
+
+    $clusterName = Get-SafeNestedName -Object $Vm -PropertyName 'HostCluster'
+    if ($null -ne $clusterName) {
+        return $clusterName
+    }
+
+    $vmHost = Get-SafePropertyValue -Object $Vm -PropertyName 'VMHost'
+    if ($null -ne $vmHost) {
+        $hostClusterName = Get-SafeNestedName -Object $vmHost -PropertyName 'HostCluster'
+        if ($null -ne $hostClusterName) {
+            return $hostClusterName
+        }
+    }
+
+    return $null
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -168,7 +230,7 @@ $vms = Get-SCVirtualMachine -VMMServer $server
 $rows = foreach ($vm in $vms) {
     # Properties can differ by SCVMM version; read everything safely to avoid strict-mode failures.
     $hostName = Get-SafeNestedName -Object $vm -PropertyName 'VMHost'
-    $clusterName = Get-SafeNestedName -Object $vm -PropertyName 'HostCluster'
+    $clusterName = Get-ClusterNameForVm -Vm $vm
     $cloudName = Get-SafeNestedName -Object $vm -PropertyName 'Cloud'
 
     $operatingSystemRaw = Get-SafePropertyValue -Object $vm -PropertyName 'OperatingSystem'
@@ -206,14 +268,18 @@ $rows = foreach ($vm in $vms) {
     $integrationServices = Get-FirstAvailablePropertyValue -Object $vm -PropertyNames @(
         'IntegrationServicesState',
         'IntegrationServicesVersion',
-        'GuestServicesEnabled'
+        'GuestServicesEnabled',
+        'Heartbeat',
+        'VMAdditions'
     )
 
     # EVC equivalent (CPU compatibility mode for migration on Hyper-V).
     $cpuCompatibilityEnabled = Get-FirstAvailablePropertyValue -Object $vm -PropertyNames @(
         'CPUCompatibilityMode',
         'CPULimitForMigration',
-        'CompatibilityForMigrationEnabled'
+        'CompatibilityForMigrationEnabled',
+        'LimitProcessorFeatures',
+        'CPULimitFunctionality'
     )
 
     # VM storage: sum provisioned/used if available and collect hosting volumes.
@@ -223,20 +289,76 @@ $rows = foreach ($vm in $vms) {
     $hostingVolumes = @()
 
     foreach ($drive in $driveItems) {
-        $sizeBytes = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('MaximumSize', 'Size', 'VirtualHardDiskSize')
-        if ($null -ne $sizeBytes) {
-            $provisionedBytes += [double]$sizeBytes
+        $vhd = Get-SafePropertyValue -Object $drive -PropertyName 'VirtualHardDisk'
+
+        $sizeProperty = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @(
+            'MaximumSize',
+            'VirtualHardDiskSize',
+            'Size'
+        )
+        if ($null -eq $sizeProperty -and $null -ne $vhd) {
+            $sizeProperty = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @(
+                'MaximumSize',
+                'Size'
+            )
+        }
+        $sizePropertyMb = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('MaximumSizeMB', 'SizeMB')
+        if ($null -eq $sizePropertyMb -and $null -ne $vhd) {
+            $sizePropertyMb = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @('MaximumSizeMB', 'SizeMB')
         }
 
-        $usedCandidate = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('FileSize', 'CurrentFileSize', 'UsedSpace')
+        if ($null -ne $sizeProperty) {
+            $resolvedSizeBytes = Convert-SizeValueToBytes -Value $sizeProperty -Unit 'Bytes'
+            if ($resolvedSizeBytes -gt 0) {
+                $provisionedBytes += [double]$resolvedSizeBytes
+            }
+        }
+        elseif ($null -ne $sizePropertyMb) {
+            $resolvedSizeBytes = Convert-SizeValueToBytes -Value $sizePropertyMb -Unit 'MB'
+            if ($resolvedSizeBytes -gt 0) {
+                $provisionedBytes += [double]$resolvedSizeBytes
+            }
+        }
+
+        $usedCandidate = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @(
+            'FileSize',
+            'CurrentFileSize',
+            'UsedSpace'
+        )
+        if ($null -eq $usedCandidate -and $null -ne $vhd) {
+            $usedCandidate = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @(
+                'FileSize',
+                'CurrentFileSize',
+                'UsedSpace'
+            )
+        }
+        $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('FileSizeMB', 'UsedSpaceMB')
+        if ($null -eq $usedCandidateMb -and $null -ne $vhd) {
+            $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @('FileSizeMB', 'UsedSpaceMB')
+        }
         if ($null -ne $usedCandidate) {
-            $usedBytes += [double]$usedCandidate
+            $resolvedUsedBytes = Convert-SizeValueToBytes -Value $usedCandidate -Unit 'Bytes'
+            if ($resolvedUsedBytes -gt 0) {
+                $usedBytes += [double]$resolvedUsedBytes
+            }
+        }
+        elseif ($null -ne $usedCandidateMb) {
+            $resolvedUsedBytes = Convert-SizeValueToBytes -Value $usedCandidateMb -Unit 'MB'
+            if ($resolvedUsedBytes -gt 0) {
+                $usedBytes += [double]$resolvedUsedBytes
+            }
         }
 
         $path = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('Location', 'Path')
+        if ($null -eq $path -and $null -ne $vhd) {
+            $path = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @('Location', 'Path')
+        }
         if ($null -ne $path) {
-            # Extract volume prefix for Windows paths (ex: C: or \\clusterstorage\\volume1).
-            if ($path -match '^[A-Za-z]:') {
+            # Extract host volume info for common Hyper-V paths.
+            if ($path -match '^[A-Za-z]:\\ClusterStorage\\([^\\]+)') {
+                $hostingVolumes += $matches[1]
+            }
+            elseif ($path -match '^[A-Za-z]:') {
                 $hostingVolumes += $matches[0]
             }
             elseif ($path -match '^\\\\[^\\]+\\[^\\]+') {
@@ -307,7 +429,7 @@ $rows = foreach ($vm in $vms) {
 
 $rows |
     Sort-Object VM |
-    Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
+    Export-Csv -Path $OutputPath -Delimiter $Delimiter -NoTypeInformation -Encoding UTF8
 
 Write-Host "Export completed: $OutputPath"
 Write-Host "VMs exported: $($rows.Count)"

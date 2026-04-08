@@ -12,6 +12,8 @@ The script is defensive against missing SCVMM properties (for example `HostClust
 .\Get-SCVMM-RVTools-vInfo.ps1 -VMMServer "vmm01.contoso.local" -OutputPath ".\SCVMM-vInfo.csv"
 ```
 
+Use `-Delimiter ';'` (default) for semicolon-separated CSV, or `-Delimiter ','` for comma-separated CSV.
+
 ### Output columns
 
 - VM
