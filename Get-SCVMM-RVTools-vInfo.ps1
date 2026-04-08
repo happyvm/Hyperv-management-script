@@ -63,6 +63,40 @@ function ConvertTo-GiB {
     }
 }
 
+function Get-SafePropertyValue {
+    param(
+        [Parameter(Mandatory = $false)]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    $property = $Object.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
+function Get-SafeNestedName {
+    param(
+        [Parameter(Mandatory = $false)]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PropertyName
+    )
+
+    $nestedObject = Get-SafePropertyValue -Object $Object -PropertyName $PropertyName
+    return Get-SafePropertyValue -Object $nestedObject -PropertyName 'Name'
+}
+
 Write-Verbose "Connecting to SCVMM server '$VMMServer'..."
 $server = Get-SCVMMServer -ComputerName $VMMServer
 
@@ -82,40 +116,30 @@ $rows = foreach ($vm in $vms) {
     $operatingSystem = if ($operatingSystemRaw -and $operatingSystemRaw.Name) { $operatingSystemRaw.Name } else { $operatingSystemRaw }
 
     # Memory is usually exposed in MB on SCVMM VM objects.
-    $memoryGb = ConvertTo-GiB -Value $vm.Memory -Unit 'MB'
+    $memoryGb = ConvertTo-GiB -Value (Get-SafePropertyValue -Object $vm -PropertyName 'Memory') -Unit 'MB'
 
     # Try common dynamic memory properties if available.
-    $dynamicMemoryEnabled = $null
-    $memoryMinGb = $null
-    $memoryMaxGb = $null
-
-    if ($vm.PSObject.Properties.Name -contains 'DynamicMemoryEnabled') {
-        $dynamicMemoryEnabled = $vm.DynamicMemoryEnabled
-    }
-    if ($vm.PSObject.Properties.Name -contains 'DynamicMemoryMinimumMB') {
-        $memoryMinGb = ConvertTo-GiB -Value $vm.DynamicMemoryMinimumMB -Unit 'MB'
-    }
-    if ($vm.PSObject.Properties.Name -contains 'DynamicMemoryMaximumMB') {
-        $memoryMaxGb = ConvertTo-GiB -Value $vm.DynamicMemoryMaximumMB -Unit 'MB'
-    }
+    $dynamicMemoryEnabled = Get-SafePropertyValue -Object $vm -PropertyName 'DynamicMemoryEnabled'
+    $memoryMinGb = ConvertTo-GiB -Value (Get-SafePropertyValue -Object $vm -PropertyName 'DynamicMemoryMinimumMB') -Unit 'MB'
+    $memoryMaxGb = ConvertTo-GiB -Value (Get-SafePropertyValue -Object $vm -PropertyName 'DynamicMemoryMaximumMB') -Unit 'MB'
 
     # Build an RVTools-like vInfo row.
     [pscustomobject]@{
-        VM            = $vm.Name
-        PowerState    = $vm.StatusString
-        OS            = $operatingSystem
-        CPUs          = $vm.CPUCount
-        MemoryGB      = $memoryGb
-        MemoryMinGB   = $memoryMinGb
-        MemoryMaxGB   = $memoryMaxGb
-        DynamicMemory = $dynamicMemoryEnabled
-        Host          = $hostName
-        Cluster       = $clusterName
-        Cloud         = $cloudName
-        HighlyAvailable = $vm.IsHighlyAvailable
-        CreationTime  = $vm.CreationTime
-        Owner         = $vm.Owner
-        Description   = $vm.Description
+        VM              = Get-SafePropertyValue -Object $vm -PropertyName 'Name'
+        PowerState      = Get-SafePropertyValue -Object $vm -PropertyName 'StatusString'
+        OS              = $operatingSystem
+        CPUs            = Get-SafePropertyValue -Object $vm -PropertyName 'CPUCount'
+        MemoryGB        = $memoryGb
+        MemoryMinGB     = $memoryMinGb
+        MemoryMaxGB     = $memoryMaxGb
+        DynamicMemory   = $dynamicMemoryEnabled
+        Host            = $hostName
+        Cluster         = $clusterName
+        Cloud           = $cloudName
+        HighlyAvailable = Get-SafePropertyValue -Object $vm -PropertyName 'IsHighlyAvailable'
+        CreationTime    = Get-SafePropertyValue -Object $vm -PropertyName 'CreationTime'
+        Owner           = Get-SafePropertyValue -Object $vm -PropertyName 'Owner'
+        Description     = Get-SafePropertyValue -Object $vm -PropertyName 'Description'
     }
 }
 
