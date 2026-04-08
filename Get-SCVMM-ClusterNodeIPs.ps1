@@ -58,6 +58,20 @@ function Get-CleanIps {
 
     foreach ($raw in @($Value)) {
         if ($null -eq $raw) { continue }
+        if ($raw -is [System.Net.IPAddress]) {
+            [void]$seen.Add($raw.IPAddressToString)
+            continue
+        }
+        if ($raw.PSObject -and ($raw.PSObject.Properties.Name -contains 'IPAddressToString')) {
+            [void]$seen.Add([string]$raw.IPAddressToString)
+            continue
+        }
+        if ($raw.PSObject -and ($raw.PSObject.Properties.Name -contains 'Address')) {
+            foreach ($ip in (Get-CleanIps -Value $raw.Address)) {
+                [void]$seen.Add($ip)
+            }
+            continue
+        }
         # Handle comma / semicolon / space separated lists in a single string
         foreach ($token in ([string]$raw -split '[,;\s]+')) {
             $token = $token.Trim()
@@ -138,9 +152,11 @@ function Add-AdapterIps {
         'ClusterTraffic' { $targetSet = $ClusterTrafficIps }
     }
 
-    $ipAddresses = Get-SafeProperty -Object $Adapter -Property 'IPAddresses'
-    foreach ($ip in (Get-CleanIps -Value $ipAddresses)) {
-        [void]$targetSet.Add($ip)
+    foreach ($ipProp in @('IPAddresses', 'IPAddress', 'IPv4Addresses', 'IPv6Addresses', 'Addresses')) {
+        $ipAddresses = Get-SafeProperty -Object $Adapter -Property $ipProp
+        foreach ($ip in (Get-CleanIps -Value $ipAddresses)) {
+            [void]$targetSet.Add($ip)
+        }
     }
 }
 
@@ -192,7 +208,6 @@ $rows = foreach ($vmHost in $vmHosts) {
             [void]$liveMigrationIps.Add($ip)
         }
     }
-
     # ------------------------------------------------------------------
     # 3. Cluster virtual IP and per-node cluster network IPs.
     # ------------------------------------------------------------------
