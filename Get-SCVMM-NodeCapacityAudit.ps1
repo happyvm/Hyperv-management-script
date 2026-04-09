@@ -101,27 +101,27 @@ if ($hosts.Count -eq 0) {
 # Récupère les VM une fois pour limiter les appels
 $allVMs = @(Get-SCVirtualMachine)
 
-$rows = foreach ($host in $hosts) {
-    $hostName = [string](Get-FirstNonNull -Object $host -PropertyNames @('ComputerName', 'FullyQualifiedDomainName', 'Name'))
-    $clusterObj = Get-OptionalPropertyValue -Object $host -PropertyName 'HostCluster'
+$rows = foreach ($nodeHost in $hosts) {
+    $hostName = [string](Get-FirstNonNull -Object $nodeHost -PropertyNames @('ComputerName', 'FullyQualifiedDomainName', 'Name'))
+    $clusterObj = Get-OptionalPropertyValue -Object $nodeHost -PropertyName 'HostCluster'
     $clusterName = if ($clusterObj) { [string]$clusterObj.Name } else { '' }
 
     # CPU physique
-    $logicalCpu = Get-FirstNonNull -Object $host -PropertyNames @('LogicalProcessorCount', 'NumberOfLogicalProcessors', 'ProcessorCount')
+    $logicalCpu = Get-FirstNonNull -Object $nodeHost -PropertyNames @('LogicalProcessorCount', 'NumberOfLogicalProcessors', 'ProcessorCount')
 
     # RAM hôte
-    $totalMemoryBytes = Get-FirstNonNull -Object $host -PropertyNames @('TotalMemory', 'Memory')
-    $availableMemoryBytes = Get-FirstNonNull -Object $host -PropertyNames @('AvailableMemory', 'MemoryAvailable')
+    $totalMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemory', 'Memory')
+    $availableMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemory', 'MemoryAvailable')
 
     # Certaines versions exposent la mémoire en MB
     if ($null -eq $totalMemoryBytes) {
-        $totalMemoryMB = Get-FirstNonNull -Object $host -PropertyNames @('TotalMemoryMB', 'MemoryMB')
+        $totalMemoryMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemoryMB', 'MemoryMB')
         if ($null -ne $totalMemoryMB) {
             $totalMemoryBytes = [double]$totalMemoryMB * 1MB
         }
     }
     if ($null -eq $availableMemoryBytes) {
-        $availableMemoryMB = Get-FirstNonNull -Object $host -PropertyNames @('AvailableMemoryMB', 'MemoryAvailableMB')
+        $availableMemoryMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemoryMB', 'MemoryAvailableMB')
         if ($null -ne $availableMemoryMB) {
             $availableMemoryBytes = [double]$availableMemoryMB * 1MB
         }
@@ -170,7 +170,7 @@ $rows = foreach ($host in $hosts) {
     $volumes = @()
     if (Get-Command -Name Get-SCVMHostVolume -ErrorAction SilentlyContinue) {
         try {
-            $volumes = @(Get-SCVMHostVolume -VMHost $host)
+            $volumes = @(Get-SCVMHostVolume -VMHost $nodeHost)
         }
         catch {
             $volumes = @()
@@ -179,7 +179,7 @@ $rows = foreach ($host in $hosts) {
 
     # 2) Fallback: propriétés embarquées sur l'objet host
     if ($volumes.Count -eq 0) {
-        $embeddedVolumes = Get-FirstNonNull -Object $host -PropertyNames @('Volumes', 'VMHostVolumes', 'StorageVolumes')
+        $embeddedVolumes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('Volumes', 'VMHostVolumes', 'StorageVolumes')
         if ($embeddedVolumes) {
             $volumes = @($embeddedVolumes)
         }
