@@ -65,6 +65,21 @@ function Convert-ToGB {
     }
 }
 
+function Convert-MBToBytes {
+    param(
+        [AllowNull()]$Value
+    )
+
+    if ($null -eq $Value) { return $null }
+
+    try {
+        return [double]$Value * 1MB
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-FirstNonNull {
     param(
         [Parameter(Mandatory = $true)]
@@ -110,20 +125,20 @@ $rows = foreach ($nodeHost in $hosts) {
     $logicalCpu = Get-FirstNonNull -Object $nodeHost -PropertyNames @('LogicalProcessorCount', 'NumberOfLogicalProcessors', 'ProcessorCount')
 
     # RAM hôte
-    $totalMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemory', 'Memory')
-    $availableMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemory', 'MemoryAvailable')
+    $totalMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemory', 'Memory', 'MemoryCapacity')
+    $availableMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemory', 'MemoryAvailable', 'AvailableHostMemory')
 
     # Certaines versions exposent la mémoire en MB
     if ($null -eq $totalMemoryBytes) {
         $totalMemoryMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemoryMB', 'MemoryMB')
         if ($null -ne $totalMemoryMB) {
-            $totalMemoryBytes = [double]$totalMemoryMB * 1MB
+            $totalMemoryBytes = Convert-MBToBytes -Value $totalMemoryMB
         }
     }
     if ($null -eq $availableMemoryBytes) {
-        $availableMemoryMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemoryMB', 'MemoryAvailableMB')
+        $availableMemoryMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemoryMB', 'MemoryAvailableMB', 'AvailableHostMemoryMB')
         if ($null -ne $availableMemoryMB) {
-            $availableMemoryBytes = [double]$availableMemoryMB * 1MB
+            $availableMemoryBytes = Convert-MBToBytes -Value $availableMemoryMB
         }
     }
 
@@ -145,11 +160,11 @@ $rows = foreach ($nodeHost in $hosts) {
             $allocatedvCPU += [int]$cpuCount
         }
 
-        $vmMemBytes = Get-FirstNonNull -Object $vm -PropertyNames @('Memory', 'MemoryAssigned')
+        $vmMemBytes = Get-FirstNonNull -Object $vm -PropertyNames @('Memory', 'MemoryAssigned', 'MemoryDemand')
         if ($null -eq $vmMemBytes) {
-            $vmMemMB = Get-FirstNonNull -Object $vm -PropertyNames @('MemoryMB', 'StartupMemory')
+            $vmMemMB = Get-FirstNonNull -Object $vm -PropertyNames @('MemoryMB', 'MemoryAssignedMB', 'MemoryDemandMB', 'StartupMemory', 'DynamicMemoryMaximumMB')
             if ($null -ne $vmMemMB) {
-                $vmMemBytes = [double]$vmMemMB * 1MB
+                $vmMemBytes = Convert-MBToBytes -Value $vmMemMB
             }
         }
 
@@ -163,8 +178,8 @@ $rows = foreach ($nodeHost in $hosts) {
         $remainingCPU = [int]$logicalCpu - [int]$allocatedvCPU
     }
 
-    $totalDiskBytes = 0.0
-    $freeDiskBytes = 0.0
+    [Nullable[double]]$totalDiskBytes = $null
+    [Nullable[double]]$freeDiskBytes = $null
 
     # 1) Voie privilégiée: cmdlet SCVMM si disponible
     $volumes = @()
@@ -189,13 +204,46 @@ $rows = foreach ($nodeHost in $hosts) {
         $sizeBytes = Get-FirstNonNull -Object $volume -PropertyNames @('Capacity', 'Size', 'TotalCapacity', 'TotalSize')
         $freeBytes = Get-FirstNonNull -Object $volume -PropertyNames @('FreeSpace', 'AvailableSpace', 'AvailableCapacity')
 
-        if ($null -ne $sizeBytes) { $totalDiskBytes += [double]$sizeBytes }
-        if ($null -ne $freeBytes) { $freeDiskBytes += [double]$freeBytes }
+        if ($null -ne $sizeBytes) {
+            if ($null -eq $totalDiskBytes) { $totalDiskBytes = 0.0 }
+            $totalDiskBytes += [double]$sizeBytes
+        }
+        if ($null -ne $freeBytes) {
+            if ($null -eq $freeDiskBytes) { $freeDiskBytes = 0.0 }
+            $freeDiskBytes += [double]$freeBytes
+        }
+    }
+
+    # 3) Fallback host-level properties (souvent exposées en MB)
+    if ($null -eq $totalDiskBytes) {
+        $hostTotalDisk = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalStorageCapacity', 'StorageCapacity', 'DiskSpaceCapacity')
+        if ($null -ne $hostTotalDisk) {
+            $totalDiskBytes = [double]$hostTotalDisk
+        }
+        else {
+            $hostTotalDiskMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalStorageCapacityMB', 'StorageCapacityMB', 'DiskSpaceCapacityMB')
+            if ($null -ne $hostTotalDiskMB) {
+                $totalDiskBytes = Convert-MBToBytes -Value $hostTotalDiskMB
+            }
+        }
+    }
+
+    if ($null -eq $freeDiskBytes) {
+        $hostFreeDisk = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableStorageCapacity', 'StorageAvailable', 'DiskSpaceAvailable')
+        if ($null -ne $hostFreeDisk) {
+            $freeDiskBytes = [double]$hostFreeDisk
+        }
+        else {
+            $hostFreeDiskMB = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableStorageCapacityMB', 'StorageAvailableMB', 'DiskSpaceAvailableMB')
+            if ($null -ne $hostFreeDiskMB) {
+                $freeDiskBytes = Convert-MBToBytes -Value $hostFreeDiskMB
+            }
+        }
     }
 
     $allocatedDiskBytes = $null
-    if ($totalDiskBytes -gt 0) {
-        $allocatedDiskBytes = $totalDiskBytes - $freeDiskBytes
+    if (($null -ne $totalDiskBytes) -and ($null -ne $freeDiskBytes)) {
+        $allocatedDiskBytes = [double]$totalDiskBytes - [double]$freeDiskBytes
     }
 
     [pscustomobject]@{
@@ -207,9 +255,9 @@ $rows = foreach ($nodeHost in $hosts) {
         RAM_Total_GB            = Convert-ToGB -Value $totalMemoryBytes
         RAM_Allocated_GB        = Convert-ToGB -Value $allocatedMemoryBytes
         RAM_Available_GB        = Convert-ToGB -Value $availableMemoryBytes
-        Disk_Total_GB           = if ($totalDiskBytes -gt 0) { Convert-ToGB -Value $totalDiskBytes } else { $null }
+        Disk_Total_GB           = if ($null -ne $totalDiskBytes) { Convert-ToGB -Value $totalDiskBytes } else { $null }
         Disk_Allocated_GB       = if ($null -ne $allocatedDiskBytes) { Convert-ToGB -Value $allocatedDiskBytes } else { $null }
-        Disk_Available_GB       = if ($freeDiskBytes -gt 0) { Convert-ToGB -Value $freeDiskBytes } else { $null }
+        Disk_Available_GB       = if ($null -ne $freeDiskBytes) { Convert-ToGB -Value $freeDiskBytes } else { $null }
         VM_Count                = $hostVMs.Count
     }
 }
