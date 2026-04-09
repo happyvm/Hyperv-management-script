@@ -96,3 +96,28 @@ Required CSV headers (case-insensitive):
 ```
 
 Use `-WhatIf` first to validate what would be created without making changes.
+
+## SCVMM node capacity audit (CPU / RAM / disque)
+
+Use `Get-SCVMM-NodeCapacityAudit.ps1` to export per-node capacity and remaining resources for SCVMM-managed Hyper-V hosts.
+
+### Example
+
+```powershell
+.\Get-SCVMM-NodeCapacityAudit.ps1 -VMMServer "vmm01.contoso.local" -OutputPath ".\SCVMM-NodeCapacityAudit.csv"
+```
+
+Exported columns include:
+
+- `Cluster`
+- `Node`
+- `CPU_Logical_Total`
+- `CPU_vCPU_Allocated`
+- `CPU_Logical_Remaining`
+- `RAM_Total_GB`
+- `RAM_Allocated_GB`
+- `RAM_Available_GB`
+- `Disk_Total_GB`
+- `Disk_Allocated_GB`
+- `Disk_Available_GB`
+- `VM_Count`
