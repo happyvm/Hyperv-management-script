@@ -99,6 +99,16 @@ function Get-FirstNonNull {
     return $null
 }
 
+function Get-NormalizedHostShortName {
+    param(
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    return $Value.Trim().ToLowerInvariant().Split('.')[0]
+}
+
 Import-Module VirtualMachineManager -ErrorAction Stop
 
 Write-Verbose "Connexion à SCVMM: $VMMServer"
@@ -147,7 +157,20 @@ $rows = foreach ($nodeHost in $hosts) {
         $allVMs | Where-Object {
             $vmHost = Get-OptionalPropertyValue -Object $_ -PropertyName 'VMHost'
             $vmHostName = if ($vmHost) { [string](Get-FirstNonNull -Object $vmHost -PropertyNames @('ComputerName', 'Name')) } else { '' }
-            $vmHostName -eq $hostName
+            $normalizedHostName = Get-NormalizedHostShortName -Value $hostName
+            $normalizedVmHostName = Get-NormalizedHostShortName -Value $vmHostName
+            $hostFqdnLower = if ([string]::IsNullOrWhiteSpace($hostName)) { '' } else { $hostName.Trim().ToLowerInvariant() }
+            $vmHostFqdnLower = if ([string]::IsNullOrWhiteSpace($vmHostName)) { '' } else { $vmHostName.Trim().ToLowerInvariant() }
+
+            (
+                -not [string]::IsNullOrWhiteSpace($normalizedHostName) -and
+                -not [string]::IsNullOrWhiteSpace($normalizedVmHostName) -and
+                $normalizedVmHostName -eq $normalizedHostName
+            ) -or (
+                -not [string]::IsNullOrWhiteSpace($hostFqdnLower) -and
+                -not [string]::IsNullOrWhiteSpace($vmHostFqdnLower) -and
+                $vmHostFqdnLower -eq $hostFqdnLower
+            )
         }
     )
 
