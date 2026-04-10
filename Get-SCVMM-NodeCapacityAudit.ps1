@@ -80,6 +80,34 @@ function Convert-MBToBytes {
     }
 }
 
+function Normalize-SizeToBytes {
+    param(
+        [AllowNull()]$Value,
+        [double]$AssumeMBBelow = 100000000
+    )
+
+    if ($null -eq $Value) { return $null }
+
+    try {
+        $numeric = [double]$Value
+    }
+    catch {
+        return $null
+    }
+
+    if ($numeric -le 0) { return $numeric }
+
+    # Certains objets SCVMM exposent "Memory" / "TotalMemory" en MB
+    # (ex: 4096), alors que d'autres versions exposent déjà des bytes.
+    # Heuristique: une valeur mémoire brute < 100 000 000 est très
+    # probablement une valeur en MB et non en bytes.
+    if ($numeric -lt $AssumeMBBelow) {
+        return $numeric * 1MB
+    }
+
+    return $numeric
+}
+
 function Get-FirstNonNull {
     param(
         [Parameter(Mandatory = $true)]
@@ -137,6 +165,8 @@ $rows = foreach ($nodeHost in $hosts) {
     # RAM hôte
     $totalMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('TotalMemory', 'Memory', 'MemoryCapacity')
     $availableMemoryBytes = Get-FirstNonNull -Object $nodeHost -PropertyNames @('AvailableMemory', 'MemoryAvailable', 'AvailableHostMemory')
+    $totalMemoryBytes = Normalize-SizeToBytes -Value $totalMemoryBytes
+    $availableMemoryBytes = Normalize-SizeToBytes -Value $availableMemoryBytes
 
     # Certaines versions exposent la mémoire en MB
     if ($null -eq $totalMemoryBytes) {
@@ -184,6 +214,7 @@ $rows = foreach ($nodeHost in $hosts) {
         }
 
         $vmMemBytes = Get-FirstNonNull -Object $vm -PropertyNames @('Memory', 'MemoryAssigned', 'MemoryDemand')
+        $vmMemBytes = Normalize-SizeToBytes -Value $vmMemBytes
         if ($null -eq $vmMemBytes) {
             $vmMemMB = Get-FirstNonNull -Object $vm -PropertyNames @('MemoryMB', 'MemoryAssignedMB', 'MemoryDemandMB', 'StartupMemory', 'DynamicMemoryMaximumMB')
             if ($null -ne $vmMemMB) {
