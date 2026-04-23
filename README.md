@@ -121,3 +121,25 @@ Exported columns include:
 - `Disk_Allocated_GB`
 - `Disk_Available_GB`
 - `VM_Count`
+
+## VLAN vCenter vs SCVMM comparison
+
+Use `Get-VLANComparison-vCenter-SCVMM.ps1` to list and compare VLAN IDs / VLAN names that exist in vCenter and in SCVMM.
+
+### Example
+
+```powershell
+.\Get-VLANComparison-vCenter-SCVMM.ps1 \
+  -VCenterServer "vcenter01.contoso.local" \
+  -SCVMMServer "vmm01.contoso.local" \
+  -OutputPath ".\VLAN-Comparison.csv"
+```
+
+Main output columns:
+
+- `VLANID`
+- `VLANName_vCenter`
+- `VLANName_SCVMM`
+- `In_vCenter`
+- `In_SCVMM`
+- `MatchStatus` (`PresentInBoth`, `OnlyInVCenter`, `OnlyInSCVMM`)
