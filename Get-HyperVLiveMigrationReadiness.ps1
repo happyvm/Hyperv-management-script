@@ -409,7 +409,7 @@ function Get-NodeInventory {
                 $adapters = @()
             }
 
-            $services = foreach ($serviceName in @('vmms', 'clussvc', 'WinRM', 'LanmanServer')) {
+            $services = foreach ($serviceName in @('vmms', 'clussvc', 'WinRM', 'LanmanServer', 'W32Time')) {
                 try {
                     Get-Service -Name $serviceName -ErrorAction Stop | Select-Object Name, Status, StartType
                 }
@@ -425,6 +425,30 @@ function Get-NodeInventory {
             catch {
                 $firewallProfiles = @()
             }
+
+            $firewallRules = @()
+            try {
+                $firewallRules = @(
+                    Get-NetFirewallRule -DisplayGroup 'Hyper-V' -ErrorAction SilentlyContinue |
+                    Select-Object DisplayName, Enabled, Direction, Action, Profile
+                )
+                if ($firewallRules.Count -eq 0) {
+                    $firewallRules = @(
+                        Get-NetFirewallRule -DisplayName '*Hyper-V*' -ErrorAction SilentlyContinue |
+                        Select-Object DisplayName, Enabled, Direction, Action, Profile
+                    )
+                }
+            }
+            catch { $firewallRules = @() }
+
+            $ntpSource = 'Unknown'
+            $ntpType   = 'Unknown'
+            try {
+                $w32tParams = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters' -ErrorAction Stop
+                if ($w32tParams.PSObject.Properties.Name -contains 'NtpServer') { $ntpSource = [string]$w32tParams.NtpServer }
+                if ($w32tParams.PSObject.Properties.Name -contains 'Type')      { $ntpType   = [string]$w32tParams.Type }
+            }
+            catch {}
 
             [pscustomobject]@{
                 ComputerName                               = $env:COMPUTERNAME
@@ -443,6 +467,9 @@ function Get-NodeInventory {
                 IPv4Addresses                              = @($ips)
                 NetAdapters                                = @($adapters)
                 FirewallProfiles                           = @($firewallProfiles)
+                FirewallRules                              = @($firewallRules)
+                NtpSource                                  = $ntpSource
+                NtpType                                    = $ntpType
             }
         }
 
@@ -458,12 +485,16 @@ function Get-NodeInventory {
             VirtualMachineMigrationPerformanceOption   = $data.VirtualMachineMigrationPerformanceOption
             MaximumVirtualMachineMigrations            = $data.MaximumVirtualMachineMigrations
             VirtualMachineMigrationNetworks            = @($data.VirtualMachineMigrationNetworks)
+            NumaSpanningEnabled                        = $data.NumaSpanningEnabled
             Services                                   = @($data.Services)
             ClusterNetworks                            = @($data.ClusterNetworks)
             VMSwitches                                 = @($data.VMSwitches)
             IPv4Addresses                              = @($data.IPv4Addresses)
             NetAdapters                                = @($data.NetAdapters)
             FirewallProfiles                           = @($data.FirewallProfiles)
+            FirewallRules                              = @($data.FirewallRules)
+            NtpSource                                  = $data.NtpSource
+            NtpType                                    = $data.NtpType
         }
 
         $nodeInventories.Add($inventory) | Out-Null
@@ -558,6 +589,47 @@ function Test-NodeInventory {
     }
     else {
         Add-Finding -Scope 'Node' -Target $target -Check 'Adresses IPv4 utilisables' -Status 'Fail' -Details 'Aucune IPv4 non APIPA/loopback trouvée.' -Recommendation 'Vérifier la configuration réseau du nœud.'
+    }
+
+    if ($null -ne $Inventory.NumaSpanningEnabled) {
+        $numaStatus = if ($Inventory.NumaSpanningEnabled -eq $true) { 'Pass' } else { 'Warning' }
+        $numaRec    = if ($Inventory.NumaSpanningEnabled -eq $true) { '' } else { 'Activer le NUMA Spanning pour permettre les migrations entre nœuds avec des topologies NUMA différentes (Set-VMHost -NumaSpanningEnabled $true).' }
+        Add-Finding -Scope 'Node' -Target $target -Check 'NUMA Spanning' -Status $numaStatus -Details "NumaSpanningEnabled = $($Inventory.NumaSpanningEnabled)." -Recommendation $numaRec
+    }
+
+    $hvInboundRules = @($Inventory.FirewallRules | Where-Object { [string]$_.Direction -eq 'Inbound' })
+    if ($hvInboundRules.Count -eq 0) {
+        Add-Finding -Scope 'Node' -Target $target -Check 'Règles pare-feu Hyper-V (entrantes)' -Status 'Warning' `
+            -Details 'Aucune règle pare-feu du groupe Hyper-V (entrante) trouvée.' `
+            -Recommendation "Activer les règles Windows Firewall du groupe 'Hyper-V' pour autoriser la Live Migration (TCP $LiveMigrationPort) et SMB (TCP 445)."
+    }
+    else {
+        $disabledRules = @($hvInboundRules | Where-Object { -not $_.Enabled })
+        if ($disabledRules.Count -gt 0) {
+            Add-Finding -Scope 'Node' -Target $target -Check 'Règles pare-feu Hyper-V (entrantes)' -Status 'Warning' `
+                -Details ("Règles entrantes Hyper-V désactivées: {0}" -f (Join-Value ($disabledRules | ForEach-Object { $_.DisplayName }))) `
+                -Recommendation 'Activer les règles pare-feu Live Migration désactivées ou vérifier les règles équivalentes (GPO, pare-feu tiers).'
+        }
+        else {
+            Add-Finding -Scope 'Node' -Target $target -Check 'Règles pare-feu Hyper-V (entrantes)' -Status 'Pass' `
+                -Details ("Toutes les règles entrantes du groupe Hyper-V sont actives ({0} règle(s))." -f $hvInboundRules.Count)
+        }
+    }
+
+    $ntpDetails = "NtpServer=$($Inventory.NtpSource); Type=$($Inventory.NtpType)"
+    if ($Inventory.NtpType -eq 'NT5DS') {
+        Add-Finding -Scope 'Node' -Target $target -Check 'Synchronisation horaire (NTP)' -Status 'Pass' `
+            -Details "$ntpDetails — Synchronisation via hiérarchie de domaine AD."
+    }
+    elseif ($Inventory.NtpType -eq 'NTP' -or $Inventory.NtpType -eq 'AllSync') {
+        Add-Finding -Scope 'Node' -Target $target -Check 'Synchronisation horaire (NTP)' -Status 'Info' `
+            -Details $ntpDetails `
+            -Recommendation 'Vérifier que le décalage horaire avec les autres nœuds est inférieur à 5 minutes (limite Kerberos).'
+    }
+    else {
+        Add-Finding -Scope 'Node' -Target $target -Check 'Synchronisation horaire (NTP)' -Status 'Warning' `
+            -Details "$ntpDetails — Type de synchronisation non standard ou indéterminé." `
+            -Recommendation 'Vérifier la configuration W32Time. La synchronisation NTP est critique pour Kerberos (décalage maximal de 5 minutes entre nœuds).'
     }
 }
 
@@ -672,6 +744,92 @@ function Test-ConnectivityMatrix {
     }
 }
 
+function Test-KerberosDelegation {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceNodeFQDN,
+        [Parameter(Mandatory = $true)][string[]]$TargetNodeFQDNs
+    )
+
+    $sourceShort = $SourceNodeFQDN.Split('.')[0]
+
+    try {
+        $searcher = [ADSISearcher]"(&(objectClass=computer)(cn=$sourceShort))"
+        $searcher.PropertiesToLoad.AddRange([string[]]@('msDS-AllowedToDelegateTo', 'userAccountControl', 'distinguishedName'))
+        $result = $searcher.FindOne()
+
+        if ($null -eq $result) {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Warning' `
+                -Details "Compte ordinateur '$sourceShort' introuvable via ADSI." `
+                -Recommendation 'Vérifier le nom NetBIOS du nœud et que le compte d'exécution a les droits de lecture AD sur l'attribut msDS-AllowedToDelegateTo.'
+            return
+        }
+
+        $uac = 0
+        if ($result.Properties['userAccountControl'].Count -gt 0) {
+            $uac = [int]$result.Properties['userAccountControl'][0]
+        }
+        $unConstrained = (($uac -band 0x00080000) -ne 0)
+
+        if ($unConstrained) {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Warning' `
+                -Details "Délégation non contrainte (unconstrained) activée sur le compte ordinateur $sourceShort (bit TRUSTED_FOR_DELEGATION)." `
+                -Recommendation 'La délégation non contrainte est une exposition de sécurité. Migrer vers la délégation contrainte (Kerberos Constrained Delegation) avec uniquement les SPNs requis.'
+            return
+        }
+
+        $delegationList = @()
+        if ($result.Properties['msDS-AllowedToDelegateTo'].Count -gt 0) {
+            $delegationList = @($result.Properties['msDS-AllowedToDelegateTo'])
+        }
+
+        if ($delegationList.Count -eq 0) {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Fail' `
+                -Details "Aucun SPN de délégation contrainte (msDS-AllowedToDelegateTo) configuré sur le compte ordinateur $sourceShort." `
+                -Recommendation 'Configurer la délégation contrainte dans ADUC (propriété Delegation) ou via Set-ADComputer -Add @{''msDS-AllowedToDelegateTo''=@(...)} avec les SPNs: "Microsoft Virtual System Migration Service/TargetNode[.FQDN]" et "cifs/TargetNode[.FQDN]" pour les migrations shared-nothing/SMB.'
+            return
+        }
+
+        $missingRequired    = [System.Collections.Generic.List[string]]::new()
+        $missingRecommended = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($targetFQDN in $TargetNodeFQDNs) {
+            $targetShort = $targetFQDN.Split('.')[0]
+
+            $spnMvsShort = "Microsoft Virtual System Migration Service/$targetShort"
+            $spnMvsFqdn  = "Microsoft Virtual System Migration Service/$targetFQDN"
+            if (-not (($delegationList -contains $spnMvsShort) -or ($delegationList -contains $spnMvsFqdn))) {
+                $missingRequired.Add($spnMvsShort) | Out-Null
+            }
+
+            $spnCifsShort = "cifs/$targetShort"
+            $spnCifsFqdn  = "cifs/$targetFQDN"
+            if (-not (($delegationList -contains $spnCifsShort) -or ($delegationList -contains $spnCifsFqdn))) {
+                $missingRecommended.Add($spnCifsShort) | Out-Null
+            }
+        }
+
+        if ($missingRequired.Count -eq 0 -and $missingRecommended.Count -eq 0) {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Pass' `
+                -Details ("Délégation contrainte complète. SPNs autorisés: {0}" -f (Join-Value $delegationList))
+        }
+        elseif ($missingRequired.Count -eq 0) {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Warning' `
+                -Details ("SPNs 'Microsoft Virtual System Migration Service' OK. SPNs 'cifs' absents (requis pour migrations shared-nothing/SMB): {0}" -f (Join-Value $missingRecommended)) `
+                -Recommendation 'Ajouter les SPNs cifs/TargetNode si vous réalisez des migrations shared-nothing avec transfert de stockage via SMB.'
+        }
+        else {
+            Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Fail' `
+                -Details ("SPNs 'Microsoft Virtual System Migration Service' manquants: {0} | SPNs 'cifs' manquants: {1} | SPNs configurés: {2}" -f (Join-Value $missingRequired), (Join-Value $missingRecommended), (Join-Value $delegationList)) `
+                -Recommendation 'Ajouter les SPNs manquants dans Active Directory sur le compte ordinateur du nœud Hyper-V source via ADUC ou Set-ADComputer.'
+        }
+    }
+    catch {
+        Add-Finding -Scope 'Delegation' -Target $sourceShort -Check 'Délégation Kerberos (AD)' -Status 'Warning' `
+            -Details $_.Exception.Message `
+            -Recommendation 'Vérifier les droits de lecture Active Directory depuis le poste d'exécution (lecture de msDS-AllowedToDelegateTo sur les comptes ordinateurs Hyper-V).'
+    }
+}
+
 function Export-Reports {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -696,9 +854,13 @@ function Export-Reports {
             VirtualMachineMigrationPerformanceOption  = $inventory.VirtualMachineMigrationPerformanceOption
             MaximumVirtualMachineMigrations           = $inventory.MaximumVirtualMachineMigrations
             VirtualMachineMigrationNetworks           = Join-Value $inventory.VirtualMachineMigrationNetworks
+            NumaSpanningEnabled                       = $inventory.NumaSpanningEnabled
             VMSwitches                                = Join-Value (@($inventory.VMSwitches) | ForEach-Object { "$($_.Name)[$($_.SwitchType)]" })
             IPv4Addresses                             = Join-Value (@($inventory.IPv4Addresses) | ForEach-Object { "$($_.IPAddress)/$($_.PrefixLength)[$($_.InterfaceAlias)]" })
             ClusterNetworks                           = Join-Value (@($inventory.ClusterNetworks) | ForEach-Object { "$($_.Name)[Role=$($_.Role);$($_.Address)/$($_.AddressMask)]" })
+            NtpSource                                 = $inventory.NtpSource
+            NtpType                                   = $inventory.NtpType
+            FirewallRules                             = Join-Value (@($inventory.FirewallRules) | Where-Object { [string]$_.Direction -eq 'Inbound' } | ForEach-Object { "$($_.DisplayName)[Enabled=$($_.Enabled)]" })
         }
     }
     @($inventoryRows) | Export-Csv -Path $inventoryPath -NoTypeInformation -Encoding UTF8 -Delimiter $Delimiter
@@ -803,6 +965,29 @@ foreach ($node in $destinationNodes) {
 Compare-ClusterNodeSettings -ClusterName $SourceClusterName -Inventories $sourceInventories
 if ($destinationInventories.Count -gt 0) {
     Compare-ClusterNodeSettings -ClusterName $DestinationClusterName -Inventories $destinationInventories
+}
+
+$allSourceFqdns = @($sourceInventories | Where-Object { -not [string]::IsNullOrWhiteSpace($_.FullyQualifiedDomainName) } | ForEach-Object { $_.FullyQualifiedDomainName })
+$allDestFqdns   = @($destinationInventories | Where-Object { -not [string]::IsNullOrWhiteSpace($_.FullyQualifiedDomainName) } | ForEach-Object { $_.FullyQualifiedDomainName })
+
+foreach ($srcInv in $sourceInventories) {
+    if ($srcInv.VirtualMachineMigrationAuthenticationType -eq 'Kerberos' -and -not [string]::IsNullOrWhiteSpace($srcInv.FullyQualifiedDomainName)) {
+        $targets = @($allSourceFqdns | Where-Object { $_ -ne $srcInv.FullyQualifiedDomainName })
+        $targets += $allDestFqdns
+        if ($targets.Count -gt 0) {
+            Test-KerberosDelegation -SourceNodeFQDN $srcInv.FullyQualifiedDomainName -TargetNodeFQDNs $targets
+        }
+    }
+}
+
+foreach ($dstInv in $destinationInventories) {
+    if ($dstInv.VirtualMachineMigrationAuthenticationType -eq 'Kerberos' -and -not [string]::IsNullOrWhiteSpace($dstInv.FullyQualifiedDomainName)) {
+        $targets = @($allSourceFqdns)
+        $targets += @($allDestFqdns | Where-Object { $_ -ne $dstInv.FullyQualifiedDomainName })
+        if ($targets.Count -gt 0) {
+            Test-KerberosDelegation -SourceNodeFQDN $dstInv.FullyQualifiedDomainName -TargetNodeFQDNs $targets
+        }
+    }
 }
 
 if ($destinationInventories.Count -gt 0) {
