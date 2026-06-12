@@ -122,6 +122,46 @@ Exported columns include:
 - `Disk_Available_GB`
 - `VM_Count`
 
+## Diagnostic Live Migration Hyper-V
+
+Use `Get-HyperVLiveMigrationReadiness.ps1` to validate the main prerequisites for Hyper-V Live Migration inside one cluster and between two external Hyper-V clusters.
+
+Because this repository targets SCVMM-managed Hyper-V environments, pass `-VMMServer` so the script discovers the nodes of each cluster from SCVMM (`Get-SCVMHost` / `HostCluster`). If `-VMMServer` is omitted or SCVMM discovery finds no host for a cluster, the script falls back to `Get-ClusterNode`.
+
+The script performs non-destructive checks for:
+
+- SCVMM-based cluster node discovery, with Failover Clustering fallback
+- Failover Clustering / Hyper-V / WinRM / SMB services
+- Hyper-V Live Migration settings (`Get-VMHost`)
+- Live Migration authentication mode and performance option consistency
+- allowed Live Migration networks
+- virtual switch name consistency across nodes and clusters
+- TCP connectivity between nodes for Live Migration (`6600` by default), SMB (`445`) and WinRM (`5985`)
+- inter-cluster Active Directory / Kerberos delegation reminders
+
+### Examples
+
+Validate one SCVMM-managed Hyper-V cluster:
+
+```powershell
+.\Get-HyperVLiveMigrationReadiness.ps1 `
+  -VMMServer "vmm01.contoso.local" `
+  -SourceClusterName "HV-CLUS01" `
+  -Verbose
+```
+
+Validate Live Migration readiness between two SCVMM-managed Hyper-V clusters:
+
+```powershell
+.\Get-HyperVLiveMigrationReadiness.ps1 `
+  -VMMServer "vmm01.contoso.local" `
+  -SourceClusterName "HV-CLUS01" `
+  -DestinationClusterName "HV-CLUS02" `
+  -OutputDirectory "C:\Temp\LM-Diag"
+```
+
+The script writes CSV and JSON reports under `HyperV-LiveMigrationReadiness` by default.
+
 ## VLAN vCenter vs SCVMM comparison
 
 Use `Get-VLANComparison-vCenter-SCVMM.ps1` to list and compare VLAN IDs / VLAN names that exist in vCenter and in SCVMM.
