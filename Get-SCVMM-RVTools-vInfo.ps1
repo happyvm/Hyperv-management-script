@@ -320,21 +320,47 @@ $rows = foreach ($vm in $vms) {
             }
         }
 
+        # SCVMM VirtualHardDisk objects commonly expose the occupied VHD/VHDX
+        # file size through Size, while MaximumSize is the provisioned capacity.
+        # Keep Size as a VHD-only fallback so disk-drive Size properties are not
+        # confused with the provisioned size already handled above.
         $usedCandidate = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @(
             'FileSize',
             'CurrentFileSize',
+            'PhysicalSize',
+            'AllocatedSize',
+            'SizeOnDisk',
             'UsedSpace'
         )
         if ($null -eq $usedCandidate -and $null -ne $vhd) {
             $usedCandidate = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @(
                 'FileSize',
                 'CurrentFileSize',
-                'UsedSpace'
+                'PhysicalSize',
+                'AllocatedSize',
+                'SizeOnDisk',
+                'UsedSpace',
+                'Size'
             )
         }
-        $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @('FileSizeMB', 'UsedSpaceMB')
+        $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $drive -PropertyNames @(
+            'FileSizeMB',
+            'CurrentFileSizeMB',
+            'PhysicalSizeMB',
+            'AllocatedSizeMB',
+            'SizeOnDiskMB',
+            'UsedSpaceMB'
+        )
         if ($null -eq $usedCandidateMb -and $null -ne $vhd) {
-            $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @('FileSizeMB', 'UsedSpaceMB')
+            $usedCandidateMb = Get-FirstAvailablePropertyValue -Object $vhd -PropertyNames @(
+                'FileSizeMB',
+                'CurrentFileSizeMB',
+                'PhysicalSizeMB',
+                'AllocatedSizeMB',
+                'SizeOnDiskMB',
+                'UsedSpaceMB',
+                'SizeMB'
+            )
         }
         if ($null -ne $usedCandidate) {
             $resolvedUsedBytes = Convert-SizeValueToBytes -Value $usedCandidate -Unit 'Bytes'
